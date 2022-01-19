@@ -1,6 +1,7 @@
 package it.winsome.common.entity;
 
 import com.google.gson.annotations.JsonAdapter;
+import it.winsome.common.entity.abstracts.BaseSocialEntity;
 import it.winsome.common.entity.abstracts.BaseVotableEntity;
 import it.winsome.common.json.PostIdJsonAdapter;
 
@@ -126,6 +127,24 @@ public class Post extends BaseVotableEntity {
         if(!originalFound)
             throw new IllegalArgumentException("No original post found during the walkthrough!");
         this.originalPost = originalPost;
+    }
+
+    @Override
+    public Object clone() throws CloneNotSupportedException {
+        Post post = (Post) super.clone();
+        post.comments = new HashMap<>(comments);
+        post.originalPost = (Post) originalPost.clone();
+        return post;
+    }
+
+    @Override
+    public <T extends BaseSocialEntity> T deepCopyAs() {
+        Post post = super.deepCopyAs();
+        post.comments = comments.values().stream().map(Comment::<Comment>deepCopyAs)
+                .collect(Collectors.toMap(x->x, y->y));
+        if(originalPost != null)
+            post.originalPost = originalPost.deepCopyAs();
+        return (T) post;
     }
 
     @Override

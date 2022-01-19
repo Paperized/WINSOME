@@ -1,7 +1,5 @@
 package it.winsome.common.entity.enums;
 
-import it.winsome.common.network.enums.NetResponseType;
-
 public enum VoteType {
     UP(0),
     DOWN(1);

@@ -401,17 +401,20 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
             NetResponseType result = userService.addComment(comment, loggedUser);
             if(result == NetResponseType.Success) {
                 response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 8);
-                response.writeInt(NetResponseType.Success.getId());
+                response.writeInt(result.getId());
                 response.writeInt(comment.getId());
                 WinsomeHelper.printfDebug("Incoming create comment from %s ended with id %d!", loggedUser.getUsername(), comment.getId());
             } else if(result == NetResponseType.UserSelfComment) {
                 response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming create comment from %s but it's own post!", loggedUser.getUsername());
             } else if(result == NetResponseType.PostNotInFeed) {
                 response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming create comment from %s but it's not in the feed!", loggedUser.getUsername());
             } else if(result == NetResponseType.EntityNotExists){
                 response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming create comment from %s but post id %d does not exist!", loggedUser.getUsername(), postId);
             }
         }

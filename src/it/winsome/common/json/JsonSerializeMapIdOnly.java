@@ -11,7 +11,7 @@ public class JsonSerializeMapIdOnly<T extends BaseSocialEntity> implements JsonS
     @Override
     public JsonElement serialize(Map<T, T> ttMap, Type type, JsonSerializationContext jsonSerializationContext) {
         JsonArray res = new JsonArray();
-        for(T entity : ttMap.keySet()) {
+        for(T entity : ttMap.values()) {
             res.add(entity.getId());
         }
         return res;

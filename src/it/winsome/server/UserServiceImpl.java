@@ -7,7 +7,7 @@ import it.winsome.common.WinsomeHelper;
 import it.winsome.common.entity.Comment;
 import it.winsome.common.entity.Post;
 import it.winsome.common.entity.User;
-import it.winsome.common.entity.Vote;
+import it.winsome.common.entity.abstracts.BaseSocialEntity;
 import it.winsome.common.entity.enums.VotableType;
 import it.winsome.common.entity.enums.VoteType;
 import it.winsome.common.exception.*;
@@ -26,6 +26,7 @@ import java.nio.file.Paths;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static it.winsome.common.network.enums.NetResponseType.*;
 
@@ -376,7 +377,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
                 if(postIndex++ < startFrom) continue;
                 Post currentPost = entry.getValue();
                 if(!currentPost.getUsername().equals(username) && user.hasUserFollowed(currentPost.getUsername())) {
-                    posts.add(currentPost);
+                    posts.add(currentPost.deepCopyAs());
                 }
 
                 if(postIndex == endAt) {
@@ -398,7 +399,8 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
                 return new ArrayList<>();
 
             int toIndex = Math.min(curr.size(), endPage);
-            return curr.subList(pageStart, toIndex);
+            return curr.subList(pageStart, toIndex).stream().map(BaseSocialEntity::<Post>deepCopyAs)
+                    .collect(Collectors.toList());
         }
     }
 
@@ -408,7 +410,11 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             for (User user : registeredUsers.values()) {
                 if(user.getUsername().equals(skipUsername)) continue;
                 if(user.hasSimilarTags(tags)) {
-                    similarUsers.add(user);
+                    try {
+                        similarUsers.add((User) user.clone());
+                    } catch (CloneNotSupportedException e) {
+                        e.printStackTrace();
+                    }
                 }
             }
         }
@@ -418,6 +424,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
     public NetResponseType addPost(Post post) {
         int generatedId = maxPostId;
+        Post inserted;
         synchronized (postMap) {
             if(post.isRewin()) {
                 Post originalPost = postMap.get(post.getOriginalPost());
@@ -440,19 +447,23 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             } while(postMap.containsKey(post));
 
             maxPostId = generatedId;
-            postMap.put(post, post);
+            inserted = post.deepCopyAs();
+            postMap.put(inserted, inserted);
         }
 
         synchronized (cachedBlogs) {
             cachedBlogs.get(post.getUsername())
-                    .add(0, post);
+                    .add(0, inserted);
             return Success;
         }
     }
 
     public Post getPost(int id) {
         synchronized (postMap) {
-            return postMap.get(new Post(id));
+            Post post = postMap.get(new Post(id));
+            if(post != null)
+                return post.deepCopyAs();
+            return null;
         }
     }
 
@@ -556,8 +567,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
                     return NetResponseType.PostNotInFeed;
                 }
 
-                Vote prevVote = post.getVote(user.getUsername());
-                if(prevVote != null) {
+                if(post.getVote(user.getUsername()) != null) {
                     return NetResponseType.UserAlreadyVoted;
                 }
 
@@ -575,8 +585,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
                     return NetResponseType.UserSelfVote;
                 }
 
-                Vote prevVote = comment.getVote(user.getUsername());
-                if(prevVote != null) {
+                if(comment.getVote(user.getUsername()) != null) {
                     return NetResponseType.UserAlreadyVoted;
                 }
 
@@ -617,7 +626,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
                 } while(commentMap.containsKey(generatedId));
 
                 comment.setId(generatedId);
-                commentMap.put(comment.getId(), comment);
+                commentMap.put(comment.getId(), comment.deepCopyAs());
                 maxCommentId = generatedId;
                 return Success;
             }
@@ -626,7 +635,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
     public Comment getComment(int id) {
         synchronized (commentMap) {
-            return commentMap.get(id);
+            return commentMap.get(id).deepCopyAs();
         }
     }
 

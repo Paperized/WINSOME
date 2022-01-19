@@ -5,12 +5,12 @@ import it.winsome.common.WinsomeHelper;
 import java.io.Serializable;
 import java.util.*;
 
-public class User implements Serializable {
+public class User implements Serializable, Cloneable {
     private String username;
     private String password;
-    private final Set<String> tagsInterests;
-    private final Set<String> usersFollowed;
-    private final Set<String> usersFollowing;
+    private Set<String> tagsInterests;
+    private Set<String> usersFollowed;
+    private Set<String> usersFollowing;
 
     public User() {
         tagsInterests = new HashSet<>();
@@ -159,6 +159,15 @@ public class User implements Serializable {
     @Override
     public int hashCode() {
         return Objects.hash(username.toLowerCase());
+    }
+
+    @Override
+    public Object clone() throws CloneNotSupportedException {
+        User user = (User) super.clone();
+        user.tagsInterests = new HashSet<>(tagsInterests);
+        user.usersFollowing = new HashSet<>(usersFollowing);
+        user.usersFollowed = new HashSet<>(usersFollowed);
+        return user;
     }
 
     @Override

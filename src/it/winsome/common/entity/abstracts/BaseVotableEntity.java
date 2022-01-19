@@ -1,12 +1,11 @@
 package it.winsome.common.entity.abstracts;
 
-import it.winsome.common.entity.Vote;
 import it.winsome.common.entity.enums.VoteType;
 import java.util.HashMap;
 import java.util.Map;
 
 public abstract class BaseVotableEntity extends BaseSocialEntity {
-    private final Map<String, Vote> votesMap;
+    private Map<String, VoteType> votesMap;
     private int totalUpvotes;
     private int totalDownvotes;
 
@@ -19,26 +18,25 @@ public abstract class BaseVotableEntity extends BaseSocialEntity {
         votesMap = new HashMap<>(0);
     }
 
-    public Vote addVote(String username, VoteType type) {
-        Vote newVote = new Vote(username, type);
-        Vote prevVote = votesMap.putIfAbsent(username, newVote);
+    public boolean addVote(String username, VoteType type) {
+        VoteType prevVote = votesMap.putIfAbsent(username, type);
 
-        if(prevVote == newVote) {
-            totalUpvotes += (newVote.getType() == VoteType.UP ? 1 : -1);
-            return newVote;
+        if(prevVote == type) {
+            totalUpvotes += (type == VoteType.UP ? 1 : -1);
+            return true;
         }
 
-        return null;
+        return false;
     }
 
-    public Vote getVote(String username) {
+    public VoteType getVote(String username) {
         return votesMap.get(username);
     }
 
     public boolean removeVote(String username) {
-        Vote removed = votesMap.remove(username);
+        VoteType removed = votesMap.remove(username);
         if(removed != null) {
-            totalUpvotes += (removed.getType() == VoteType.UP ? -1 : 1);
+            totalUpvotes += (removed == VoteType.UP ? -1 : 1);
             return true;
         }
 
@@ -59,5 +57,12 @@ public abstract class BaseVotableEntity extends BaseSocialEntity {
 
     public void setTotalDownvotes(int totalDownvotes) {
         this.totalDownvotes = totalDownvotes;
+    }
+
+    @Override
+    public <T extends BaseSocialEntity> T deepCopyAs() {
+        BaseVotableEntity base = super.deepCopyAs();
+        base.votesMap = new HashMap<>(votesMap);
+        return (T) base;
     }
 }

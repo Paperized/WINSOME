@@ -522,6 +522,10 @@ public class ClientMain {
                                     if(result == NetResponseType.Success) {
                                         ShowPostDTO data = responseMessage.readObject(ShowPostDTO::netDeserialize);
                                         Post currentPost = data.post;
+                                        if(currentPost == null) {
+                                            printError("Post with id %d does not exist!", postId);
+                                            break;
+                                        }
                                         StringBuilder outputString = new StringBuilder(500);
                                         outputString.append("  ").append(currentPost.getTitle()).append("  ").append(currentPost.getCreationDate().toString())
                                                 .append('@').append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
@@ -566,7 +570,7 @@ public class ClientMain {
                     try {
                         cachedMessage.sendMessage(tcpClient);
                         NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
-                        if(responseMessage.getType() == NetMessageType.ShowPost) {
+                        if(responseMessage.getType() == NetMessageType.DeletePost) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
                                 printResponse("Post with id %d deleted successfully!", postId);
@@ -587,7 +591,7 @@ public class ClientMain {
                     break;
                 } // done
                 case "rewinPost": {
-                    if(!checkParamsEqCount(commandSplitted, 2)) continue;
+                    if(!checkParamsEqCount(commandSplitted, 1)) continue;
                     if(checkServerConnection() || checkLogin()) continue;
 
                     int postId = Integer.parseInt(commandSplitted[1]);

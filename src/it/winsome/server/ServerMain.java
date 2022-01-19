@@ -63,6 +63,7 @@ public class ServerMain {
             long elapsed = System.currentTimeMillis() - start;
             WinsomeHelper.printfDebug("Autosave completed in %dms!", elapsed);
         }, serverConfiguration.autoSavePeriodSeconds, serverConfiguration.autoSavePeriodSeconds, TimeUnit.SECONDS);
+        getUserServiceImpl().test();
         tcpServer.startServer();
     }
 

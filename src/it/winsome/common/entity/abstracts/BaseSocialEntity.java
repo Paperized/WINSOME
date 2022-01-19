@@ -1,11 +1,13 @@
 package it.winsome.common.entity.abstracts;
 
+import it.winsome.common.entity.Post;
+
 import java.io.Serializable;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Objects;
 
-public abstract class BaseSocialEntity implements Serializable {
+public abstract class BaseSocialEntity implements Serializable, Cloneable {
     private int id;
     private Timestamp creationDate;
 
@@ -45,5 +47,20 @@ public abstract class BaseSocialEntity implements Serializable {
     @Override
     public int hashCode() {
         return Objects.hash(id);
+    }
+
+    @Override
+    public Object clone() throws CloneNotSupportedException {
+        return super.clone();
+    }
+
+    public <T extends BaseSocialEntity> T deepCopyAs() {
+        try {
+            Object cloned = super.clone();
+            return (T) cloned;
+        } catch (CloneNotSupportedException | ClassCastException e) {
+            e.printStackTrace();
+            return null;
+        }
     }
 }
