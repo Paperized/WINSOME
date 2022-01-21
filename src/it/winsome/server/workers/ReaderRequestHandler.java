@@ -1,4 +1,4 @@
-package it.winsome.server;
+package it.winsome.server.workers;
 
 import it.winsome.common.dto.*;
 import it.winsome.common.entity.Comment;
@@ -9,45 +9,49 @@ import it.winsome.common.entity.enums.VoteType;
 import it.winsome.common.exception.NoAuthorizationException;
 import it.winsome.common.exception.SocketDisconnectedException;
 import it.winsome.common.network.NetMessage;
-import it.winsome.common.network.enums.NetMessageHandlerInterface;
 import it.winsome.common.network.enums.NetMessageType;
 import it.winsome.common.network.enums.NetResponseType;
 import it.winsome.common.WinsomeHelper;
+import it.winsome.server.session.ConnectionSession;
+import it.winsome.server.ServerConnector;
+import it.winsome.server.ServerMain;
+import it.winsome.server.UserServiceImpl;
 
 import java.io.IOException;
+import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.SelectionKey;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.WritableByteChannel;
 import java.rmi.RemoteException;
 import java.util.*;
-import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import static it.winsome.common.network.enums.NetMessageType.*;
 
-public class RequestHandler implements Runnable, NetMessageHandlerInterface {
-    private final static Map<NetMessageType, BiFunction<RequestHandler, NetMessage, Boolean>> mapDispatcher;
+public class ReaderRequestHandler implements Runnable {
+    private final static Map<NetMessageType, Function<ReaderRequestHandler, Boolean>> mapDispatcher;
     private static UserServiceImpl userService;
-    private final TcpServer server;
-    private final SocketChannel channel;
+    private final ServerConnector server;
+    private final ConnectionSession session;
+    private final WritableByteChannel writableByteChannel;
+    private final ReadableByteChannel readableByteChannel;
     private final SelectionKey key;
+    private boolean didFinishWrite = true;
 
-    public RequestHandler(TcpServer server, SelectionKey key) {
+    public ReaderRequestHandler(ServerConnector server, SelectionKey key) {
         if(userService == null)
             userService = ServerMain.getUserServiceImpl();
 
         this.server = server;
         this.key = key;
-        channel = (SocketChannel) key.channel();
+        writableByteChannel = (WritableByteChannel) key.channel();
+        readableByteChannel = (ReadableByteChannel) key.channel();
+        session = (ConnectionSession) key.attachment();
         this.key.interestOps(0);
     }
 
     @Override
-    public SocketChannel getSocketChannel() {
-        return channel;
-    }
-
-    @Override
     public void run() {
-        if(!channel.isConnected()) {
+        if(!readableByteChannel.isOpen()) {
             onClientDisconnected();
             System.out.println("Connection closed!");
             return;
@@ -55,72 +59,89 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
 
         NetMessage incomingMessage;
         try {
-            incomingMessage = NetMessage.fromHandler(this);
+            incomingMessage = session.getReadableMessage();
+            if(!incomingMessage.didStartReading()) {
+                incomingMessage = NetMessage.fromChannel(incomingMessage, readableByteChannel);
+                session.setReadableMessage(incomingMessage);
+            } else {
+                NetMessage.keepReadingFromChannel(incomingMessage, readableByteChannel);
+            }
+
+            if(!incomingMessage.isReadFully()) {
+                System.out.println("Debug, message not read fully!");
+                this.key.interestOps(SelectionKey.OP_READ);
+                this.server.onHandlerFinish();
+                return;
+            }
         } catch (SocketDisconnectedException e) {
+            onClientDisconnected();
+            System.out.println("Connection closed!");
+            return;
+        }
+
+        Function<ReaderRequestHandler, Boolean> fn = mapDispatcher.getOrDefault(incomingMessage.getType(),
+                                                                        ReaderRequestHandler::handleUnknown);
+        if(!fn.apply(this)) {
             System.out.println("Connection closed!");
             onClientDisconnected();
             return;
         }
 
-        BiFunction<RequestHandler, NetMessage, Boolean> fn = mapDispatcher.getOrDefault(incomingMessage.getType(),
-                                                                        RequestHandler::handleUnknown);
-        if(!fn.apply(this, incomingMessage)) {
-            System.out.println("Connection closed!");
-            onClientDisconnected();
-            return;
-        }
-
-        this.key.interestOps(SelectionKey.OP_READ);
+        if(didFinishWrite)
+            this.key.interestOps(SelectionKey.OP_READ);
+        else
+            this.key.interestOps(SelectionKey.OP_WRITE);
         this.server.onHandlerFinish();
     }
 
     static {
-        mapDispatcher = Collections.unmodifiableMap(new HashMap<NetMessageType, BiFunction<RequestHandler, NetMessage, Boolean>>() {{
-            put(Login, RequestHandler::handleLogin);
-            put(Follow, RequestHandler::handleFollow);
-            put(Unfollow, RequestHandler::handleUnfollow);
-            put(ListUser, RequestHandler::handleListUser);
-            put(ViewBlog, RequestHandler::handleViewBlog);
-            put(ShowFeed, RequestHandler::handleShowFeed);
-            put(ShowPost, RequestHandler::handleShowPost);
-            put(CreatePost, RequestHandler::handleCreatePost);
-            put(DeletePost, RequestHandler::handleDeletePost);
-            put(RewinPost, RequestHandler::handleRewinPost);
-            put(RatePost, RequestHandler::handleRateEntity);
-            put(RateComment, RequestHandler::handleRateEntity);
-            put(CreateComment, RequestHandler::handleCreateComment);
-            put(Logout, RequestHandler::handleLogout);
+        mapDispatcher = Collections.unmodifiableMap(new HashMap<NetMessageType, Function<ReaderRequestHandler, Boolean>>() {{
+            put(Login, ReaderRequestHandler::handleLogin);
+            put(Follow, ReaderRequestHandler::handleFollow);
+            put(Unfollow, ReaderRequestHandler::handleUnfollow);
+            put(ListUser, ReaderRequestHandler::handleListUser);
+            put(ViewBlog, ReaderRequestHandler::handleViewBlog);
+            put(ShowFeed, ReaderRequestHandler::handleShowFeed);
+            put(ShowPost, ReaderRequestHandler::handleShowPost);
+            put(CreatePost, ReaderRequestHandler::handleCreatePost);
+            put(DeletePost, ReaderRequestHandler::handleDeletePost);
+            put(RewinPost, ReaderRequestHandler::handleRewinPost);
+            put(RatePost, ReaderRequestHandler::handleRateEntity);
+            put(RateComment, ReaderRequestHandler::handleRateEntity);
+            put(CreateComment, ReaderRequestHandler::handleCreateComment);
+            put(Logout, ReaderRequestHandler::handleLogout);
         }});
     }
 
-    public static boolean handleLogin(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleLogin(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         String username = WinsomeHelper.normalizeUsername(incomingRequest.readString());
         String password = incomingRequest.readString();
 
-        NetMessage response;
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
         User user;
-        if((user = requestHandler.hasAuthorizedUser()) != null) {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        if((user = readerRequestHandler.hasAuthorizedUser()) != null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
             response.writeInt(NetResponseType.ClientAlreadyLoggedIn.getId());
             WinsomeHelper.printfDebug("Incoming login with username %s but client already logged as %s!", username, user.getUsername());
         } else {
-            NetResponseType result = userService.makeSession(username, password, requestHandler.key);
+            NetResponseType result = userService.makeSession(username, password, readerRequestHandler.key);
 
             if(result == NetResponseType.UsernameNotExists) {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming login with username %s but does not exist!", username);
             } else if(result == NetResponseType.WrongPassword) {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming login with %s:%s but wrong password!", username, password);
             } else if(result == NetResponseType.UserAlreadyLoggedIn) {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming login with %s but a session already exist!", username, password);
             } else {
-                LoginUserDTO dto = new LoginUserDTO((User) requestHandler.key.attachment());
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(),
+                LoginUserDTO dto = new LoginUserDTO((User) readerRequestHandler.key.attachment());
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(),
                         4 + LoginUserDTO.netSize(dto));
 
                 response.writeInt(result.getId());
@@ -129,15 +150,17 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
             }
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleFollow(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleFollow(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         String toFollow = WinsomeHelper.normalizeUsername(incomingRequest.readString());
 
-        NetMessage response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
+        response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
         User user;
-        if((user = requestHandler.hasAuthorizedUser()) == null) {
+        if((user = readerRequestHandler.hasAuthorizedUser()) == null) {
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printfDebug("Incoming follow to %s but client isn't logged in!", toFollow);
         } else {
@@ -166,15 +189,17 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
             }
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleUnfollow(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleUnfollow(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         String toFollow = WinsomeHelper.normalizeUsername(incomingRequest.readString());
 
-        NetMessage response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
+        response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
         User user;
-        if((user = requestHandler.hasAuthorizedUser()) == null) {
+        if((user = readerRequestHandler.hasAuthorizedUser()) == null) {
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printfDebug("Incoming unfollow to %s but client isn't logged in!", toFollow);
         } else {
@@ -208,98 +233,103 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
             }
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleListUser(RequestHandler requestHandler, NetMessage incomingRequest) {
-        NetMessage response;
+    public static boolean handleListUser(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
         User loggedUser;
-        if((loggedUser = requestHandler.hasAuthorizedUser()) == null) {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        if((loggedUser = readerRequestHandler.hasAuthorizedUser()) == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printlnDebug("Incoming list users but client is not logged in!");
         } else {
             Set<String> interestsSet = loggedUser.getTags();
             List<User> similarUsers = userService.getSuggestedUsersByTags(interestsSet, loggedUser.getUsername());
             ListUsersDTO data = new ListUsersDTO(similarUsers);
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(),
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(),
                     ListUsersDTO.netSize(data) + 4);
             response.writeInt(NetResponseType.Success.getId());
             response.writeObject(data, ListUsersDTO::netSerialize);
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleShowPost(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleShowPost(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
 
-        NetMessage response;
-        if((requestHandler.hasAuthorizedUser()) == null) {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
+        if((readerRequestHandler.hasAuthorizedUser()) == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printlnDebug("Incoming show feed but client is not logged in!");
         } else {
             Post post = userService.getPost(postId);
             ShowPostDTO postDTO = new ShowPostDTO(post);
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(),
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(),
                     ShowPostDTO.netSize(postDTO) + 4);
             response.writeInt(NetResponseType.Success.getId());
             response.writeObject(postDTO, ShowPostDTO::netSerialize);
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleShowFeed(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleShowFeed(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int pageIndex = incomingRequest.readInt();
 
-        NetMessage response;
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
         User loggedUser;
-        if((loggedUser = requestHandler.hasAuthorizedUser()) == null) {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        if((loggedUser = readerRequestHandler.hasAuthorizedUser()) == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printlnDebug("Incoming show feed but client is not logged in!");
         } else {
             List<Post> userFeed = userService.getFeedByUsername(loggedUser.getUsername(), pageIndex);
             ShowFeedDTO feedDTO = new ShowFeedDTO(0);
             feedDTO.postList = userFeed;
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(),
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(),
                     ShowFeedDTO.netSize(feedDTO) + 4);
             response.writeInt(NetResponseType.Success.getId());
             response.writeObject(feedDTO, ShowFeedDTO::netSerialize);
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleViewBlog(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleViewBlog(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int pageIndex = incomingRequest.readInt();
 
-        NetMessage response;
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
         User loggedUser;
-        if((loggedUser = requestHandler.hasAuthorizedUser()) == null) {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        if((loggedUser = readerRequestHandler.hasAuthorizedUser()) == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printlnDebug("Incoming view blog but client is not logged in!");
         } else {
             List<Post> userBlog = userService.getBlogByUsername(loggedUser.getUsername(), pageIndex);
             ViewBlogDTO blogDTO = new ViewBlogDTO(0);
             blogDTO.postList = userBlog;
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(),
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(),
                     ViewBlogDTO.netSize(blogDTO) + 4);
             response.writeInt(NetResponseType.Success.getId());
             response.writeObject(blogDTO, ViewBlogDTO::netSerialize);
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleCreatePost(RequestHandler requestHandler, NetMessage incomingRequest) {
-        NetMessage response;
+    public static boolean handleCreatePost(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
         User loggedUser;
-        if((loggedUser = requestHandler.hasAuthorizedUser()) == null) {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        if((loggedUser = readerRequestHandler.hasAuthorizedUser()) == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printlnDebug("Incoming create post but client is not logged in!");
         } else {
@@ -309,31 +339,32 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
             NetResponseType result = userService.addPost(newPost);
 
             if(result != NetResponseType.Success) {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(NetResponseType.OriginalPostNotExists.getId());
                 WinsomeHelper.printfDebug("Incoming create post from %s but the original post does not exists!", loggedUser.getUsername());
             } else {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 8);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 8);
                 response.writeInt(NetResponseType.Success.getId());
                 response.writeInt(newPost.getId());
                 WinsomeHelper.printfDebug("Incoming create post from %s ended with id %d!", loggedUser.getUsername(), newPost.getId());
             }
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleDeletePost(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleDeletePost(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
 
-        NetMessage response;
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
         User loggedUser;
-        if((loggedUser = requestHandler.hasAuthorizedUser()) == null) {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        if((loggedUser = readerRequestHandler.hasAuthorizedUser()) == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printlnDebug("Incoming delete post but client is not logged in!");
         } else {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
 
             try {
                 if(userService.removePostIfOwner(postId, loggedUser.getUsername())) {
@@ -349,16 +380,17 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
             }
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleRewinPost(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleRewinPost(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
 
-        NetMessage response;
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
         User loggedUser;
-        if((loggedUser = requestHandler.hasAuthorizedUser()) == null) {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        if((loggedUser = readerRequestHandler.hasAuthorizedUser()) == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printlnDebug("Incoming rewin post but client is not logged in!");
         } else {
@@ -366,32 +398,33 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
             rewin.setOriginalPost(new Post(postId));
             NetResponseType result = userService.addPost(rewin);
             if(result == NetResponseType.EntityNotExists) {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(NetResponseType.EntityNotExists.getId());
                 WinsomeHelper.printfDebug("Incoming rewin post from %s with id %d but post does not exist!", loggedUser.getUsername(), postId);
             } else if(result == NetResponseType.UserSelfRewin) {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(NetResponseType.UserSelfRewin.getId());
                 WinsomeHelper.printfDebug("Incoming rewin post from %s with id %d but post does not exist!", loggedUser.getUsername(), postId);
             } else {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 8);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 8);
                 response.writeInt(NetResponseType.Success.getId());
                 response.writeInt(rewin.getId());
                 WinsomeHelper.printfDebug("Incoming rewin post from %s with id %d successful!", loggedUser.getUsername(), postId);
             }
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleCreateComment(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleCreateComment(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
         String content = incomingRequest.readString();
 
-        NetMessage response = null;
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
         User loggedUser;
-        if((loggedUser = requestHandler.hasAuthorizedUser()) == null) {
-            response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        if((loggedUser = readerRequestHandler.hasAuthorizedUser()) == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printlnDebug("Incoming create comment but client is not logged in!");
         } else {
@@ -400,42 +433,44 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
 
             NetResponseType result = userService.addComment(comment, loggedUser);
             if(result == NetResponseType.Success) {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 8);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 8);
                 response.writeInt(result.getId());
                 response.writeInt(comment.getId());
                 WinsomeHelper.printfDebug("Incoming create comment from %s ended with id %d!", loggedUser.getUsername(), comment.getId());
             } else if(result == NetResponseType.UserSelfComment) {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming create comment from %s but it's own post!", loggedUser.getUsername());
             } else if(result == NetResponseType.PostNotInFeed) {
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming create comment from %s but it's not in the feed!", loggedUser.getUsername());
             } else if(result == NetResponseType.EntityNotExists){
-                response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming create comment from %s but post id %d does not exist!", loggedUser.getUsername(), postId);
             }
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleRateEntity(RequestHandler requestHandler, NetMessage incomingRequest) {
+    public static boolean handleRateEntity(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
         VoteType type = VoteType.fromId(incomingRequest.readInt());
         VotableType entityType = VotableType.fromId(incomingRequest.readInt());
 
-        NetMessage response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
+        response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
         if(type == null || entityType == null) {
             response.writeInt(NetResponseType.InvalidParameters.getId());
             WinsomeHelper.printfDebug("Incoming rate %s but client is not logged in!", entityType == null ? "??" : entityType.toString());
-            return sendMessage(requestHandler, incomingRequest);
+            return sendMessage(readerRequestHandler, incomingRequest);
         }
 
         User loggedUser;
-        if((loggedUser = requestHandler.hasAuthorizedUser()) == null) {
+        if((loggedUser = readerRequestHandler.hasAuthorizedUser()) == null) {
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printfDebug("Incoming rate %s but client is not logged in!", entityType.toString());
         } else {
@@ -463,17 +498,19 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
             }
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleLogout(RequestHandler requestHandler, NetMessage incomingRequest) {
-        NetMessage response = NetMessage.reuseNetMessageOrCreate(incomingRequest, incomingRequest.getType(), 4);
+    public static boolean handleLogout(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
+        response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
         User loggedUser;
-        if((loggedUser = requestHandler.hasAuthorizedUser()) == null) {
+        if((loggedUser = readerRequestHandler.hasAuthorizedUser()) == null) {
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printlnDebug("Incoming logout but client is not logged in!");
         } else {
-            if(userService.removeSession(requestHandler.key)) {
+            if(userService.removeSession(readerRequestHandler.key)) {
                 response.writeInt(NetResponseType.Success.getId());
                 WinsomeHelper.printfDebug("Incoming logout with %s successfully!", loggedUser.getUsername());
             } else {
@@ -482,19 +519,20 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
             }
         }
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
-    public static boolean handleUnknown(RequestHandler requestHandler, NetMessage incomingRequest) {
-        NetMessage response = NetMessage.reuseNetMessageOrCreate(incomingRequest, None, 4);
+    public static boolean handleUnknown(ReaderRequestHandler readerRequestHandler) {
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
+        response = NetMessage.reuseWritableNetMessageOrCreate(response, None, 4);
         response.writeInt(NetResponseType.InvalidParameters.getId());
         WinsomeHelper.printlnDebug("Incoming message has an unknown type!");
 
-        return sendMessage(requestHandler, response);
+        return sendMessage(readerRequestHandler, response);
     }
 
     private User hasAuthorizedUser() {
-        User loggedUser = (User) key.attachment();
+        User loggedUser = ((ConnectionSession) key.attachment()).getUserLogged();
         if(loggedUser == null) {
             return null;
         }
@@ -512,19 +550,19 @@ public class RequestHandler implements Runnable, NetMessageHandlerInterface {
         userService.removeSession(key);
         key.cancel();
         try {
-            channel.close();
+            key.channel().close();
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    private static boolean sendMessage(RequestHandler requestHandler, NetMessage response) {
+    private static boolean sendMessage(ReaderRequestHandler readerRequestHandler, NetMessage response) {
         try {
-            response.sendMessage(requestHandler);
+            readerRequestHandler.didFinishWrite = response.sendMessage(readerRequestHandler.writableByteChannel);
+            readerRequestHandler.session.setWritableMessage(response);
+            return true;
         } catch (SocketDisconnectedException e) {
             return false;
         }
-
-        return true;
     }
 }

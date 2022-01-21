@@ -1,0 +1,11 @@
+{
+  "rmiServiceName": "serviceName",
+  "rmiServicePort": 6000,
+  "tcpAddress": "127.0.0.1",
+  "tcpPort": 5959,
+  "dataFolder": "data/",
+  "autoSavePeriodSeconds": 20,
+  "timeoutOnStopAutoSaveSeconds": 3,
+  "keepAliveThreadPoolMinutes": 5,
+  "timeoutTerminationThreadPoolMs": 2000
+}

@@ -1,0 +1,6 @@
+{
+  "rmiServiceName": "serviceName",
+  "rmiServicePort": 6000,
+  "serverTcpAddress": "127.0.0.1",
+  "serverTcpPort": 5959
+}

@@ -6,6 +6,7 @@ public class Comment extends BaseVotableEntity {
     private String owner;
     private String content;
     private int postId;
+    boolean needIteration = true;
 
     public Comment() {
         this(-1);
@@ -54,5 +55,13 @@ public class Comment extends BaseVotableEntity {
                 ", postId=" + postId + '\'' +
                 ", creationDate=" + getCreationDate() +
                 '}';
+    }
+
+    public boolean isNeedIteration() {
+        return needIteration;
+    }
+
+    public void setNeedIteration(boolean needIteration) {
+        this.needIteration = needIteration;
     }
 }

@@ -11,6 +11,7 @@ import it.winsome.common.exception.SocketDisconnectedException;
 import it.winsome.common.exception.UserAlreadyExistsException;
 import it.winsome.common.exception.UserNotExistsException;
 import it.winsome.common.network.NetMessage;
+import it.winsome.common.network.enums.NetConnectionType;
 import it.winsome.common.network.enums.NetMessageType;
 import it.winsome.common.network.enums.NetResponseType;
 import it.winsome.common.service.interfaces.UserCallback;
@@ -36,7 +37,7 @@ public class ClientMain {
 
     private final static BufferedReader reader =
             new BufferedReader(new InputStreamReader(System.in));
-    private final static TcpClient tcpClient = new TcpClient();
+    private final static ClientConnector clientConnector = new ClientConnector();
     private static NetMessage cachedMessage;
 
     private static final ClientSocialState clientState = new ClientSocialState();
@@ -121,21 +122,20 @@ public class ClientMain {
                         break;
                     }
 
-                    if(!tcpClient.isConnected()) {
-                        if(!tcpClient.connect(configuration.serverTcpAddress, configuration.serverTcpPort)) {
+                    if(!clientConnector.isConnected()) {
+                        if(!clientConnector.connect(configuration.serverTcpAddress, configuration.serverTcpPort)) {
                             printError("Could not connect to server!");
                             break;
                         }
                     }
 
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.Login,
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.Login,
                             NetMessage.getStringSize(username, password))
                             .writeString(username)
                             .writeString(password);
 
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.Login) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.UsernameNotExists) {
@@ -169,11 +169,10 @@ public class ClientMain {
                     if(!checkParamsEqCount(commandSplitted, 0)) continue;
                     if(checkServerConnection() || checkLogin()) break;
 
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.Logout, 0);
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.Logout, 0);
 
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.Logout) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
@@ -204,10 +203,9 @@ public class ClientMain {
                         case "users": {
                             if(checkServerConnection() || checkLogin()) break;
 
-                            cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.ListUser, 0);
+                            cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.ListUser, 0);
                             try {
-                                cachedMessage.sendMessage(tcpClient);
-                                NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                                NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                                 if(responseMessage.getType() == NetMessageType.ListUser) {
                                     NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                                     if(result == NetResponseType.Success) {
@@ -307,13 +305,12 @@ public class ClientMain {
                     if(checkServerConnection() || checkLogin()) break;
                     String user = commandSplitted[1];
 
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.Follow,
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.Follow,
                             NetMessage.getStringSize(user))
                             .writeString(user);
 
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.Follow) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
@@ -339,13 +336,12 @@ public class ClientMain {
                     if(checkServerConnection() || checkLogin()) break;
                     String user = commandSplitted[1];
 
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.Unfollow,
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.Unfollow,
                             NetMessage.getStringSize(user))
                             .writeString(user);
 
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.Unfollow) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
@@ -370,11 +366,10 @@ public class ClientMain {
                 } // done
                 case "viewBlog": {
                     if(checkServerConnection() || checkLogin()) break;
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.ViewBlog, 4)
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.ViewBlog, 4)
                             .writeInt(0);
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.ViewBlog) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
@@ -426,14 +421,13 @@ public class ClientMain {
                     String title = commandSplitted[1];
                     String content = commandSplitted[2];
 
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.CreatePost,
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.CreatePost,
                             NetMessage.getStringSize(title, content))
                             .writeString(title)
                             .writeString(content);
 
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.CreatePost) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
@@ -458,11 +452,10 @@ public class ClientMain {
                     switch(commandSplitted[1]) {
                         case "feed": {
                             if(checkServerConnection() || checkLogin()) break;
-                            cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.ShowFeed, 4)
+                            cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.ShowFeed, 4)
                                     .writeInt(0);
                             try {
-                                cachedMessage.sendMessage(tcpClient);
-                                NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                                NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                                 if(responseMessage.getType() == NetMessageType.ShowFeed) {
                                     NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                                     if(result == NetResponseType.Success) {
@@ -512,11 +505,10 @@ public class ClientMain {
                             if(checkServerConnection() || checkLogin()) break;
 
                             int postId = Integer.parseInt(commandSplitted[2]);
-                            cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.ShowPost, 4)
+                            cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.ShowPost, 4)
                                     .writeInt(postId);
                             try {
-                                cachedMessage.sendMessage(tcpClient);
-                                NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                                NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                                 if(responseMessage.getType() == NetMessageType.ShowPost) {
                                     NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                                     if(result == NetResponseType.Success) {
@@ -565,11 +557,10 @@ public class ClientMain {
                     if(!checkParamsEqCount(commandSplitted, 1)) continue;
                     if(checkServerConnection() || checkLogin()) continue;
                     int postId = Integer.parseInt(commandSplitted[1]);
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.DeletePost, 4)
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.DeletePost, 4)
                             .writeInt(postId);
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.DeletePost) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
@@ -595,11 +586,10 @@ public class ClientMain {
                     if(checkServerConnection() || checkLogin()) continue;
 
                     int postId = Integer.parseInt(commandSplitted[1]);
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.RewinPost, 4)
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.RewinPost, 4)
                             .writeInt(postId);
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.RewinPost) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
@@ -633,13 +623,12 @@ public class ClientMain {
                         break;
                     }
 
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.RatePost, 12)
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.RatePost, 12)
                             .writeInt(postId)
                             .writeInt(vote.getId())
                             .writeInt(VotableType.Post.getId());
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.RatePost) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
@@ -670,12 +659,11 @@ public class ClientMain {
                     int postId = Integer.parseInt(commandSplitted[1]);
                     String comment = commandSplitted[2];
 
-                    cachedMessage = NetMessage.reuseNetMessageOrCreate(cachedMessage, NetMessageType.CreateComment, 4 + NetMessage.getStringSize(comment))
+                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.CreateComment, 4 + NetMessage.getStringSize(comment))
                             .writeInt(postId)
                             .writeString(comment);
                     try {
-                        cachedMessage.sendMessage(tcpClient);
-                        NetMessage responseMessage = NetMessage.fromHandler(tcpClient);
+                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
                         if(responseMessage.getType() == NetMessageType.CreateComment) {
                             NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
                             if(result == NetResponseType.Success) {
@@ -693,7 +681,6 @@ public class ClientMain {
                                 printError("Unexpected response from server!");
                             }
                         }
-
                     } catch(SocketDisconnectedException ex) {
                         ex.printStackTrace();
                     }
@@ -741,7 +728,7 @@ public class ClientMain {
     }
 
     private static boolean checkServerConnection() {
-        if(!tcpClient.isConnected()) {
+        if(!clientConnector.isConnected()) {
             printError("You are not connected to the server, try login before using other functionalities!");
             return true;
         }
@@ -756,6 +743,11 @@ public class ClientMain {
         }
 
         return false;
+    }
+
+    private static NetMessage sendAndAwaitResponse(NetConnectionType type) throws SocketDisconnectedException {
+        cachedMessage.sendMessage(clientConnector, type);
+        return NetMessage.fromConnector(clientConnector, type);
     }
 
     private static void printResponse(String format, Object... args) {
@@ -813,9 +805,9 @@ public class ClientMain {
     private static void onQuit() {
         System.out.println("Closing...");
 
-        if(tcpClient.isConnected()) {
+        if(clientConnector.isConnected()) {
             try {
-                tcpClient.disconnect();
+                clientConnector.disconnect();
             } catch (IOException e) {
                 e.printStackTrace();
             }

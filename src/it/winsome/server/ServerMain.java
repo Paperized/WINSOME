@@ -2,6 +2,8 @@ package it.winsome.server;
 
 import it.winsome.server.config.ServerConfiguration;
 import it.winsome.common.WinsomeHelper;
+import it.winsome.server.workers.AutoSaveData;
+import it.winsome.server.workers.RecalculateWallet;
 
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
@@ -16,11 +18,12 @@ import java.util.concurrent.TimeUnit;
 public class ServerMain {
     private static UserServiceImpl registerService;
     private static Registry reg;
-    private static TcpServer tcpServer;
-    private static ScheduledExecutorService autoSaveExecutor;
+    private static ServerConnector tcpServer;
+    private static ScheduledExecutorService threadScheduler;
 
     private final static ServerConfiguration serverConfiguration = new ServerConfiguration();
     private static boolean configLoadingFailed = false;
+    private static RecalculateWallet walletCalculator;
 
     public static void main(String[] args) throws IOException {
         WinsomeHelper.setDebugMode(true);
@@ -52,17 +55,17 @@ public class ServerMain {
                 "Server pronto (nome servizio = %s, porta registry = %d)\n",
                 serverConfiguration.rmiServiceName, serverConfiguration.rmiServicePort);
 
-        tcpServer = new TcpServer(serverConfiguration.keepAliveThreadPoolMinutes,
+        tcpServer = new ServerConnector(serverConfiguration.keepAliveThreadPoolMinutes,
                     serverConfiguration.timeoutTerminationThreadPoolMs);
         tcpServer.initServer(serverConfiguration.tcpAddress, serverConfiguration.tcpPort);
 
-        autoSaveExecutor = Executors.newSingleThreadScheduledExecutor();
-        autoSaveExecutor.scheduleAtFixedRate(() -> {
-            long start = System.currentTimeMillis();
-            registerService.saveToDisk();
-            long elapsed = System.currentTimeMillis() - start;
-            WinsomeHelper.printfDebug("Autosave completed in %dms!", elapsed);
-        }, serverConfiguration.autoSavePeriodSeconds, serverConfiguration.autoSavePeriodSeconds, TimeUnit.SECONDS);
+        AutoSaveData dataSaver = new AutoSaveData(registerService);
+        walletCalculator = new RecalculateWallet("237.0.10.10", 10909, 80);
+
+        threadScheduler = Executors.newScheduledThreadPool(2);
+        threadScheduler.scheduleAtFixedRate(walletCalculator, 10,10, TimeUnit.SECONDS);
+        threadScheduler.scheduleAtFixedRate(dataSaver, serverConfiguration.autoSavePeriodSeconds,
+                serverConfiguration.autoSavePeriodSeconds, TimeUnit.SECONDS);
         getUserServiceImpl().test();
         tcpServer.startServer();
     }
@@ -77,11 +80,12 @@ public class ServerMain {
             if(configLoadingFailed)
                 return;
 
-            autoSaveExecutor.shutdown();
-            if(!autoSaveExecutor.awaitTermination(serverConfiguration.timeoutOnStopAutoSaveSeconds, TimeUnit.SECONDS)) {
-                autoSaveExecutor.shutdownNow();
+            threadScheduler.shutdown();
+            if(!threadScheduler.awaitTermination(serverConfiguration.timeoutOnStopAutoSaveSeconds, TimeUnit.SECONDS)) {
+                threadScheduler.shutdownNow();
             }
             registerService.saveToDisk();
+            walletCalculator.shutdownMulticast();
 
             reg.unbind(serverConfiguration.rmiServiceName);
             System.out.println("RMI Service unbinded!");

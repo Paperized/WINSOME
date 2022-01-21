@@ -1,11 +1,12 @@
 package it.winsome.common.entity.abstracts;
 
+import it.winsome.common.entity.Vote;
 import it.winsome.common.entity.enums.VoteType;
-import java.util.HashMap;
-import java.util.Map;
+
+import java.util.*;
 
 public abstract class BaseVotableEntity extends BaseSocialEntity {
-    private Map<String, VoteType> votesMap;
+    private Map<String, Vote> votesMap;
     private int totalUpvotes;
     private int totalDownvotes;
 
@@ -19,29 +20,29 @@ public abstract class BaseVotableEntity extends BaseSocialEntity {
     }
 
     public boolean addVote(String username, VoteType type) {
-        VoteType prevVote = votesMap.putIfAbsent(username, type);
-
-        if(prevVote == type) {
-            totalUpvotes += (type == VoteType.UP ? 1 : -1);
-            return true;
+        if(votesMap.containsKey(username)) {
+            return false;
         }
 
-        return false;
+        votesMap.put(username, new Vote(username, type));
+        return true;
     }
 
-    public VoteType getVote(String username) {
+    public Vote getVote(String username) {
         return votesMap.get(username);
     }
 
     public boolean removeVote(String username) {
-        VoteType removed = votesMap.remove(username);
+        Vote removed = votesMap.remove(username);
         if(removed != null) {
-            totalUpvotes += (removed == VoteType.UP ? -1 : 1);
+            totalUpvotes += (removed.getType() == VoteType.UP ? -1 : 1);
             return true;
         }
 
         return false;
     }
+
+    public Collection<Vote> getVotes() { return Collections.unmodifiableCollection(votesMap.values()); }
 
     public int getTotalUpvotes() {
         return totalUpvotes;

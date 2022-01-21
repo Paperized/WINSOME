@@ -1,14 +1,16 @@
 package it.winsome.common.network;
 
 import it.winsome.common.exception.SocketDisconnectedException;
-import it.winsome.common.network.enums.NetMessageHandlerInterface;
+import it.winsome.common.network.enums.NetConnectionType;
+import it.winsome.common.network.enums.NetClientConnector;
 import it.winsome.common.network.enums.NetMessageType;
 import it.winsome.common.WinsomeHelper;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ReadOnlyBufferException;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.function.BiConsumer;
@@ -22,20 +24,22 @@ public class NetMessage {
     private int messageLength;
     private NetMessageType type;
     private ByteBuffer data;
+    private int nextByteWritable = 0;
+    private int nextByteReadable = 0;
 
     private NetMessage() { }
 
-    public static NetMessage reuseNetMessageOrCreate(NetMessage message, NetMessageType type, int capacityNeeded) {
+    public static NetMessage reuseWritableNetMessageOrCreate(NetMessage message, NetMessageType type, int capacityNeeded) {
         capacityNeeded += 8;
         if(message == null) return writableNetMessage(type, capacityNeeded);
         if(message.getMaxCapacity() < capacityNeeded) {
             return writableNetMessage(type, capacityNeeded);
         }
 
-        return reuseNetMessage(message, type);
+        return reuseWritableNetMessage(message, type);
     }
 
-    public static NetMessage reuseNetMessage(NetMessage message, NetMessageType type) {
+    public static NetMessage reuseWritableNetMessage(NetMessage message, NetMessageType type) {
         if(message == null) throw new NullPointerException("Message cannot be null!");
         message.type = type;
         message.messageLength = 8;
@@ -63,6 +67,26 @@ public class NetMessage {
         return message;
     }
 
+    public static NetMessage reuseReadableNetMessageOrCreate(NetMessage message, int capacityNeeded) {
+        capacityNeeded += 8;
+        if(message == null) return readableNetMessage(ByteBuffer.allocate(capacityNeeded));
+        if(message.getMaxCapacity() < capacityNeeded) {
+            return readableNetMessage(ByteBuffer.allocate(capacityNeeded));
+        }
+
+        return reuseReadableNetMessage(message);
+    }
+
+    public static NetMessage reuseReadableNetMessage(NetMessage message) {
+        if(message == null) throw new NullPointerException("Message cannot be null!");
+        message.hasChanged = false;
+        message.data.clear();
+        message.messageLength = message.getMaxCapacity();
+        message.readOnly = true;
+        message.nextByteReadable = message.nextByteWritable = 0;
+        return message;
+    }
+
     public static NetMessage readableNetMessage(ByteBuffer data) {
         NetMessage message = new NetMessage();
         if(data == null) throw new NullPointerException("Data cannot be null");
@@ -75,43 +99,96 @@ public class NetMessage {
         return message;
     }
 
-    public void sendMessage(NetMessageHandlerInterface handler) throws SocketDisconnectedException {
+    public boolean sendMessage(WritableByteChannel channel) throws SocketDisconnectedException {
         if(messageLength < 8) throw new IllegalArgumentException("NetMessage must be minimum 8 bytes");
-        SocketChannel channel = handler.getSocketChannel();
         if(channel == null) throw new NullPointerException("SocketChannel cannot be null!");
 
         ByteBuffer messageBuffer = getByteBuffer();
-        messageBuffer.flip();
+        if(didStartWriting())
+            messageBuffer.position(nextByteWritable);
+        else
+            messageBuffer.flip();
+
         int justSent;
         try {
-            while((justSent = channel.write(messageBuffer)) >= 0 && messageBuffer.hasRemaining());
+            while((justSent = channel.write(messageBuffer)) > 0 && messageBuffer.hasRemaining())
+                nextByteWritable += justSent;
 
-            WinsomeHelper.printfDebug("Sent message size %d", messageBuffer.position());
+            WinsomeHelper.printfDebug("Sent message size %d", nextByteWritable);
+            return isWrittenFully();
         } catch(IOException ex) {
             throw new SocketDisconnectedException();
         }
     }
 
-    public static NetMessage fromHandler(NetMessageHandlerInterface handler) throws SocketDisconnectedException {
-        SocketChannel socketChannel = handler.getSocketChannel();
+    public boolean sendMessage(NetClientConnector handler, NetConnectionType type) throws SocketDisconnectedException {
+        return sendMessage(handler.getWritableChannel(type));
+    }
+
+    public static NetMessage fromConnector(NetClientConnector handler, NetConnectionType type) throws SocketDisconnectedException {
+        return fromChannel(null, handler.getReadableChannel(type));
+    }
+
+    public static NetMessage fromConnector(NetMessage reuse, NetClientConnector handler, NetConnectionType type) throws SocketDisconnectedException {
+        return fromChannel(reuse, handler.getReadableChannel(type));
+    }
+
+    public static NetMessage fromChannel(NetMessage reuse, ReadableByteChannel channel) throws SocketDisconnectedException {
+        try {
+            NetMessage newMessage = readHeaderMessage(reuse, channel);
+            int lastRead;
+            while((lastRead = channel.read(newMessage.data)) > 0 && newMessage.data.hasRemaining())
+                newMessage.nextByteReadable += lastRead;
+
+            if(lastRead == -1) {
+                throw new SocketDisconnectedException();
+            }
+
+            WinsomeHelper.printfDebug("Received message size %d", newMessage.nextByteReadable);
+            return newMessage;
+        } catch (IOException ex) {
+            throw new SocketDisconnectedException();
+        }
+    }
+
+    public static boolean keepReadingFromChannel(NetMessage netMessage, ReadableByteChannel channel) throws SocketDisconnectedException {
+        if(netMessage == null || channel == null) throw new NullPointerException("Parameters cannot be null!");
+        if(!netMessage.didStartReading()) {
+            throw new IllegalArgumentException("Use this method after calling NetMessage.fromHandler(...)");
+        }
+
+        if(netMessage.isReadFully()) return true;
+        try {
+            int lastRead;
+            while((lastRead = channel.read(netMessage.data)) > 0 && netMessage.data.hasRemaining())
+                netMessage.nextByteReadable += lastRead;
+
+            if(lastRead == -1) {
+                throw new SocketDisconnectedException();
+            }
+
+            WinsomeHelper.printfDebug("Received message size %d", netMessage.nextByteReadable);
+            return netMessage.isReadFully();
+        } catch (IOException e) {
+            throw new SocketDisconnectedException();
+        }
+    }
+
+    private static NetMessage readHeaderMessage(NetMessage reuse, ReadableByteChannel channel) throws SocketDisconnectedException {
+        if(channel == null) throw new NullPointerException("Channel cannot be null!");
         ByteBuffer lengthBuffer = ByteBuffer.allocate(4);
         int lastRead;
         try {
-            while((lastRead = socketChannel.read(lengthBuffer)) >= 0 && lengthBuffer.hasRemaining());
-            if(lastRead == -1) {
+            while ((lastRead = channel.read(lengthBuffer)) >= 0 && lengthBuffer.hasRemaining());
+            if (lastRead == -1) {
                 throw new SocketDisconnectedException();
             }
 
             int messageLength = lengthBuffer.getInt(0);
-            ByteBuffer fullBuffer = ByteBuffer.allocate(messageLength);
-            fullBuffer.putInt(messageLength);
-            while((lastRead = socketChannel.read(fullBuffer)) >= 0 && fullBuffer.hasRemaining());
-            if(lastRead == -1) {
-                throw new SocketDisconnectedException();
-            }
-
-            WinsomeHelper.printfDebug("Received message size %d", messageLength);
-            return NetMessage.readableNetMessage(fullBuffer);
+            NetMessage newMessage = NetMessage.reuseReadableNetMessageOrCreate(reuse, messageLength - 8);
+            newMessage.data.putInt(messageLength);
+            newMessage.nextByteReadable = 4;
+            return newMessage;
         } catch (IOException ex) {
             throw new SocketDisconnectedException();
         }
@@ -276,8 +353,20 @@ public class NetMessage {
         return data.duplicate();
     }
 
-    public ByteBuffer getTest() {
-        return data;
+    public boolean didStartWriting() {
+        return nextByteWritable > 0;
+    }
+
+    public boolean didStartReading() {
+        return nextByteReadable > 0;
+    }
+
+    public boolean isWrittenFully() {
+        return nextByteWritable == data.position();
+    }
+
+    public boolean isReadFully() {
+        return nextByteReadable == data.position();
     }
 
     public int getMaxCapacity() {

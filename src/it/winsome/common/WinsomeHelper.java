@@ -5,6 +5,9 @@ import it.winsome.common.entity.abstracts.BaseSocialEntity;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Iterator;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
 
 public class WinsomeHelper {
     private static boolean debugMode = false;
@@ -43,6 +46,24 @@ public class WinsomeHelper {
         return builder.append(']').toString();
     }
 
+    public static Lock acquireReadLock(ReadWriteLock rwLock) {
+        Lock rLock = rwLock.readLock();
+        rLock.lock();
+        return rLock;
+    }
+
+    public static Lock acquireWriteLock(ReadWriteLock rwLock) {
+        Lock wLock = rwLock.writeLock();
+        wLock.lock();
+        return wLock;
+    }
+
+    public static void releaseAllLocks(Lock... locks) {
+        for(Lock lock : locks) {
+            lock.unlock();
+        }
+    }
+
     public static String normalizeUsername(String username) {
         if(username.startsWith(" ") || username.endsWith(" ")) {
             return username.trim().toLowerCase();
@@ -57,14 +78,6 @@ public class WinsomeHelper {
         }
 
         return tag.toLowerCase();
-    }
-
-    public static <T extends BaseSocialEntity> T entityFromId(int id, Class<T> cl) {
-        try {
-            return cl.getConstructor(Integer.class).newInstance(id);
-        } catch(Exception ex) {
-            return null;
-        }
     }
 
     /**

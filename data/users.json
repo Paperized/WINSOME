@@ -1,0 +1,81 @@
+[
+  {
+    "username": "piero",
+    "password": "1b2c79ce0ec2f87b757e1f40ea1555cdc450c8b799b04bc27d600eb5899e4a40",
+    "tagsInterests": [
+      "youtube",
+      "film",
+      "crypto"
+    ],
+    "usersFollowed": [
+      "gianmarco",
+      "ghfjy787"
+    ],
+    "usersFollowing": [],
+    "walletBTCupdated": true,
+    "walletSize": 0.0,
+    "walletSizeBTC": 0.0
+  },
+  {
+    "username": "pippo99",
+    "password": "1b2c79ce0ec2f87b757e1f40ea1555cdc450c8b799b04bc27d600eb5899e4a40",
+    "tagsInterests": [
+      "vino",
+      "agricoltura",
+      "lol",
+      "manga"
+    ],
+    "usersFollowed": [],
+    "usersFollowing": [],
+    "walletBTCupdated": true,
+    "walletSize": 0.0,
+    "walletSizeBTC": 0.0
+  },
+  {
+    "username": "gianmarco",
+    "password": "1b2c79ce0ec2f87b757e1f40ea1555cdc450c8b799b04bc27d600eb5899e4a40",
+    "tagsInterests": [
+      "youtube",
+      "lol",
+      "film",
+      "programmazione"
+    ],
+    "usersFollowed": [],
+    "usersFollowing": [],
+    "walletBTCupdated": true,
+    "walletSize": 0.0,
+    "walletSizeBTC": 0.0
+  },
+  {
+    "username": "ghfjy787",
+    "password": "1b2c79ce0ec2f87b757e1f40ea1555cdc450c8b799b04bc27d600eb5899e4a40",
+    "tagsInterests": [
+      "youtube",
+      "pesca",
+      "lol",
+      "manga",
+      "programmazione",
+      "film",
+      "anime"
+    ],
+    "usersFollowed": [],
+    "usersFollowing": [],
+    "walletBTCupdated": true,
+    "walletSize": 0.0,
+    "walletSizeBTC": 0.0
+  },
+  {
+    "username": "clacla",
+    "password": "1b2c79ce0ec2f87b757e1f40ea1555cdc450c8b799b04bc27d600eb5899e4a40",
+    "tagsInterests": [
+      "manga",
+      "un cazzo",
+      "anime"
+    ],
+    "usersFollowed": [],
+    "usersFollowing": [],
+    "walletBTCupdated": true,
+    "walletSize": 0.0,
+    "walletSizeBTC": 0.0
+  }
+]

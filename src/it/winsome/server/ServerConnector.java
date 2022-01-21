@@ -1,15 +1,16 @@
 package it.winsome.server;
 
+import it.winsome.server.session.ConnectionSession;
+import it.winsome.server.workers.ReaderRequestHandler;
+import it.winsome.server.workers.WriterRequestHandler;
+
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
+import java.net.*;
+import java.nio.channels.*;
 import java.util.Iterator;
 import java.util.concurrent.*;
 
-public class TcpServer {
+public class ServerConnector {
     private InetSocketAddress address;
     private Selector selector;
     private ServerSocketChannel serverSocketChannel;
@@ -19,7 +20,7 @@ public class TcpServer {
 
     private ExecutorService requestHandler;
 
-    public TcpServer(long keepAliveThreadPoolTimerMinutes, long timeoutTerminationThreadPoolMs) {
+    public ServerConnector(long keepAliveThreadPoolTimerMinutes, long timeoutTerminationThreadPoolMs) {
         this.keepAliveThreadPoolTimerMinutes = keepAliveThreadPoolTimerMinutes;
         this.timeoutTerminationThreadPoolMs = timeoutTerminationThreadPoolMs;
     }
@@ -74,7 +75,9 @@ public class TcpServer {
                 if(key.isAcceptable()) {
                     handleAccept(key);
                 } else if(key.isReadable()) {
-                    requestHandler.execute(new RequestHandler(this, key));
+                    requestHandler.execute(new ReaderRequestHandler(this, key));
+                } else if(key.isWritable()) {
+                    requestHandler.execute(new WriterRequestHandler(this, key));
                 }
             }
         }
@@ -85,10 +88,12 @@ public class TcpServer {
         SocketChannel client = server.accept();
         System.out.println("Accepted connection from " + client);
         client.configureBlocking(false);
-        client.register(selector, SelectionKey.OP_READ);
+        SelectionKey clientKey = client.register(selector, SelectionKey.OP_READ);
+        clientKey.attach(new ConnectionSession());
     }
 
     public void onHandlerFinish() {
         selector.wakeup();
     }
+
 }

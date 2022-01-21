@@ -26,20 +26,29 @@ import java.nio.file.Paths;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
 import static it.winsome.common.network.enums.NetResponseType.*;
 
 public class UserServiceImpl extends UnicastRemoteObject implements UserService {
     private final Map<String, User> registeredUsers;
+    private final ReadWriteLock registeredUsersRW;
     private final Map<String, UserCallback> registeredCallbacks;
     private final Map<String, SelectionKey> currentSessions;
+    private final ReadWriteLock currentSessionsRW;
     private final Map<String, LinkedList<Post>> cachedBlogs;
+    private final ReadWriteLock cachedBlogsRW;
 
-    private int maxPostId;
+    private final AtomicInteger maxPostId;
     private final Map<Post, Post> postMap;
-    private int maxCommentId;
+    private final ReadWriteLock postMapRW;
+    private final AtomicInteger maxCommentId;
     private final Map<Integer, Comment> commentMap;
+    private final ReadWriteLock commentMapRW;
 
     private final String dataFolder;
 
@@ -52,6 +61,15 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         commentMap = new HashMap<>();
         currentSessions = new HashMap<>();
         cachedBlogs = new HashMap<>();
+
+        maxPostId = new AtomicInteger();
+        maxCommentId = new AtomicInteger();
+
+        registeredUsersRW = new ReentrantReadWriteLock();
+        cachedBlogsRW = new ReentrantReadWriteLock();
+        postMapRW = new ReentrantReadWriteLock();
+        commentMapRW = new ReentrantReadWriteLock();
+        currentSessionsRW = new ReentrantReadWriteLock();
 
         if(loadFromDisk()) {
             WinsomeHelper.printlnDebug("Data loaded succesfully!");
@@ -67,6 +85,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
                 .setPrettyPrinting()
                 .create();
 
+        Lock rLock = WinsomeHelper.acquireReadLock(postMapRW);
         String jsonPost = gsonPost.toJson(postMap.values());
         File postFile = new File(dataFolder + "posts.json");
         try {
@@ -83,11 +102,13 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             e.printStackTrace();
             allCompleted = false;
         }
+        rLock.unlock();
 
         Gson gson = new GsonBuilder()
                 .setPrettyPrinting()
                 .create();
 
+        rLock = WinsomeHelper.acquireReadLock(commentMapRW);
         String jsonComment = gson.toJson(commentMap.values());
         File commentFile = new File(dataFolder + "comments.json");
         try {
@@ -103,7 +124,9 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             e.printStackTrace();
             allCompleted = false;
         }
+        rLock.unlock();
 
+        rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
         String jsonUser = gson.toJson(registeredUsers.values());
         File userFile = new File(dataFolder + "users.json");
         try {
@@ -119,6 +142,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             e.printStackTrace();
             allCompleted = false;
         }
+        rLock.unlock();
 
         return allCompleted;
     }
@@ -133,10 +157,13 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             String jsonPost = new String(Files.readAllBytes(Paths.get(dataFolder + "posts.json")), StandardCharsets.UTF_8);
             List<Post> posts = gsonPost.fromJson(jsonPost, new TypeToken<List<Post>>(){}.getType());
             posts.sort((o1, o2) -> o2.getCreationDate().compareTo(o1.getCreationDate()));
+            int maxPostIdTemp = 0;
             for(Post post : posts) {
                 postMap.put(post, post);
-                maxPostId = Math.max(maxPostId, post.getId());
+                maxPostIdTemp = Math.max(maxPostIdTemp, post.getId());
             }
+            maxPostId.set(maxPostIdTemp);
+
             postMap.values().forEach(x -> {
                 if(x.isRewin()) {
                     x.setOriginalPost(postMap.get(x.getOriginalPost()));
@@ -155,6 +182,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             String jsonComment = new String(Files.readAllBytes(Paths.get(dataFolder + "comments.json")), StandardCharsets.UTF_8);
             List<Comment> comments = gson.fromJson(jsonComment, new TypeToken<List<Comment>>(){}.getType());
             Post temp = new Post();
+            int maxCommentIdTemp = 0;
             for(Comment comment : comments) {
                 temp.setId(comment.getPostId());
                 Post referredPost = postMap.get(temp);
@@ -164,8 +192,9 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
                 }
                 referredPost.addComment(comment);
                 commentMap.put(comment.getId(), comment);
-                maxCommentId = Math.max(maxCommentId, comment.getId());
+                maxCommentIdTemp = Math.max(maxCommentIdTemp, comment.getId());
             }
+            maxCommentId.set(maxCommentIdTemp);
         } catch (IOException e) {
             if(!(e instanceof NoSuchFileException)) {
                 e.printStackTrace();
@@ -190,6 +219,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
     }
 
     public void test() {
+        if(registeredUsers.size() > 0) return;
         String psw = WinsomeHelper.generateFromSHA256("download99");
         registeredUsers.put("ghfjy787", new User("ghfjy787", psw, new String[] { "pesca", "programmazione", "film", "LoL", "youtube", "anime", "manga" }));
         cachedBlogs.put("ghfjy787", new LinkedList<>());
@@ -241,7 +271,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         addPost(new Post(-1, "pippo99", "A me mi piacciono le api grandi!", "sisi miele si!"));
         addPost(new Post(-1, "clacla", "Ecco perchè mi piaccono le anime TDDY!", "BEH LO SAPETE ANCHE VOI!"));
 
-        WinsomeHelper.printfDebug("Max id post: %d", maxPostId);
+        WinsomeHelper.printfDebug("Max id post: %d", maxPostId.get());
         saveToDisk();
     }
 
@@ -253,11 +283,11 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             throw new NoTagsFoundException();
         }
 
-        synchronized (registeredUsers) {
-            User oldUser = registeredUsers.putIfAbsent(username, user);
-            if(oldUser != null) {
-                throw new UserAlreadyExistsException();
-            }
+        Lock wLock = WinsomeHelper.acquireWriteLock(registeredUsersRW);
+        User oldUser = registeredUsers.putIfAbsent(username, user);
+        wLock.unlock();
+        if(oldUser != null) {
+            throw new UserAlreadyExistsException();
         }
 
         return user;
@@ -266,10 +296,12 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
     @Override
     public void registerUserCallback(String username, UserCallback callbackObject) throws RemoteException, UserNotExistsException {
         username = WinsomeHelper.normalizeUsername(username);
-        synchronized (registeredUsers) {
-            if(!registeredUsers.containsKey(username)) {
-                throw new UserNotExistsException();
-            }
+        Lock rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+        boolean userExist = registeredUsers.containsKey(username);
+        rLock.unlock();
+
+        if(!userExist) {
+            throw new UserNotExistsException();
         }
 
         synchronized (registeredCallbacks) {
@@ -284,10 +316,12 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
     @Override
     public void unregisterUserCallback(String username, UserCallback callbackObject) throws RemoteException, UserNotExistsException {
         username = WinsomeHelper.normalizeUsername(username);
-        synchronized (registeredUsers) {
-            if(!registeredUsers.containsKey(username)) {
-                throw new UserNotExistsException();
-            }
+        Lock rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+        boolean userExist = registeredUsers.containsKey(username);
+        rLock.unlock();
+
+        if(!userExist) {
+            throw new UserNotExistsException();
         }
 
         synchronized (registeredCallbacks) {
@@ -305,37 +339,43 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         if(caller == null) throw new NullPointerException("Caller cannot be null");
         User current = (User) caller.attachment();
         if(current != null) {
-            synchronized (currentSessions) {
-                caller.attach(null);
-                return currentSessions.remove(current.getUsername()) != null;
-            }
+            caller.attach(null);
+            Lock rLock = WinsomeHelper.acquireReadLock(currentSessionsRW);
+            boolean wasRemoved = currentSessions.remove(current.getUsername()) != null;
+            rLock.unlock();
+            caller.attach(null);
+            return wasRemoved;
         }
 
         return false;
     }
 
     public NetResponseType makeSession(String username, String password, SelectionKey caller) {
-        synchronized (registeredUsers) {
-            synchronized (currentSessions) {
-                if(currentSessions.get(username) != null) {
-                    return UserAlreadyLoggedIn;
-                }
-
-                User user = registeredUsers.get(username);
-                if(user == null) {
-                    return NetResponseType.UsernameNotExists;
-                } else if(!password.equals(user.getPassword())) {
-                    return NetResponseType.WrongPassword;
-                }
-
-                currentSessions.put(username, caller);
-                caller.attach(user);
-            }
+        Lock sessionLock = WinsomeHelper.acquireWriteLock(currentSessionsRW);
+        if(currentSessions.get(username) != null) {
+            sessionLock.unlock();
+            return UserAlreadyLoggedIn;
         }
 
-        synchronized (cachedBlogs) {
-            cachedBlogs.putIfAbsent(username, new LinkedList<>());
+        Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+        User user = registeredUsers.get(username);
+        if(user == null) {
+            WinsomeHelper.releaseAllLocks(sessionLock, userLock);
+            return NetResponseType.UsernameNotExists;
+        } else if(!password.equals(user.getPassword())) {
+            WinsomeHelper.releaseAllLocks(sessionLock, userLock);
+            return NetResponseType.WrongPassword;
         }
+
+        currentSessions.put(username, caller);
+        sessionLock.unlock();
+        userLock.unlock();
+        caller.attach(user);
+
+        Lock blogLock = WinsomeHelper.acquireWriteLock(cachedBlogsRW);
+        cachedBlogs.putIfAbsent(username, new LinkedList<>());
+        blogLock.unlock();
+
         return NetResponseType.Success;
     }
 
@@ -360,31 +400,33 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
     public List<Post> getFeedByUsername(String username, int page) {
         final int pageSize = 5;
         User user;
-        synchronized (registeredUsers) {
-            user = registeredUsers.get(username);
-        }
+
+        Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+        user = registeredUsers.get(username);
+        userLock.unlock();
 
         if(user == null) return null;
         int startFrom = page * pageSize;
         int endAt = startFrom + pageSize;
         List<Post> posts = new ArrayList<>();
         int postIndex = 0;
-        synchronized (postMap) {
-            if(startFrom > postMap.size())
-                return posts;
 
-            for(Map.Entry<Post, Post> entry : postMap.entrySet()) {
-                if(postIndex++ < startFrom) continue;
-                Post currentPost = entry.getValue();
-                if(!currentPost.getUsername().equals(username) && user.hasUserFollowed(currentPost.getUsername())) {
-                    posts.add(currentPost.deepCopyAs());
-                }
+        Lock postLock = WinsomeHelper.acquireReadLock(postMapRW);
+        if(startFrom > postMap.size())
+            return posts;
 
-                if(postIndex == endAt) {
-                    break;
-                }
+        for(Map.Entry<Post, Post> entry : postMap.entrySet()) {
+            if(postIndex++ < startFrom) continue;
+            Post currentPost = entry.getValue();
+            if(!currentPost.getUsername().equals(username) && user.hasUserFollowed(currentPost.getUsername())) {
+                posts.add(currentPost.deepCopyAs());
+            }
+
+            if(postIndex == endAt) {
+                break;
             }
         }
+        postLock.unlock();
 
         return posts;
     }
@@ -393,267 +435,250 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         final int pageSize = 5;
         int pageStart = page * pageSize;
         int endPage = pageStart + pageSize;
-        synchronized (cachedBlogs) {
-            List<Post> curr = cachedBlogs.get(username);
-            if(curr.size() < pageStart)
-                return new ArrayList<>();
 
-            int toIndex = Math.min(curr.size(), endPage);
-            return curr.subList(pageStart, toIndex).stream().map(BaseSocialEntity::<Post>deepCopyAs)
+        List<Post> result;
+        Lock blogLock = WinsomeHelper.acquireReadLock(cachedBlogsRW);
+        List<Post> curr = cachedBlogs.get(username);
+        if(curr.size() < pageStart)
+            return new ArrayList<>();
+
+        int toIndex = Math.min(curr.size(), endPage);
+        result = curr.subList(pageStart, toIndex).stream().map(BaseSocialEntity::<Post>deepCopyAs)
                     .collect(Collectors.toList());
-        }
+        blogLock.unlock();
+        return result;
     }
 
     public List<User> getSuggestedUsersByTags(Collection<String> tags, String skipUsername) {
         List<User> similarUsers = new ArrayList<>();
-        synchronized (registeredUsers) {
-            for (User user : registeredUsers.values()) {
-                if(user.getUsername().equals(skipUsername)) continue;
-                if(user.hasSimilarTags(tags)) {
-                    try {
-                        similarUsers.add((User) user.clone());
-                    } catch (CloneNotSupportedException e) {
-                        e.printStackTrace();
-                    }
+
+        Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+        for (User user : registeredUsers.values()) {
+            if(user.getUsername().equals(skipUsername)) continue;
+            if(user.hasSimilarTags(tags)) {
+                try {
+                    similarUsers.add((User) user.clone());
+                } catch (CloneNotSupportedException e) {
+                    e.printStackTrace();
                 }
             }
         }
-
+        userLock.unlock();
         return similarUsers;
     }
 
     public NetResponseType addPost(Post post) {
-        int generatedId = maxPostId;
+        int generatedId = maxPostId.get();
         Post inserted;
-        synchronized (postMap) {
-            if(post.isRewin()) {
-                Post originalPost = postMap.get(post.getOriginalPost());
-                if(originalPost == null) {
-                    return OriginalPostNotExists;
-                }
 
-                while(originalPost.isRewin()) {
-                    originalPost = originalPost.getOriginalPost();
-                }
-
-                if(originalPost.getUsername().equals(post.getUsername()))
-                    return UserSelfRewin;
-
-                post.setOriginalPost(originalPost);
+        Lock postLock = WinsomeHelper.acquireWriteLock(postMapRW);
+        if(post.isRewin()) {
+            Post originalPost = postMap.get(post.getOriginalPost());
+            if(originalPost == null) {
+                postLock.unlock();
+                return OriginalPostNotExists;
             }
 
-            do {
-                post.setId(generatedId++);
-            } while(postMap.containsKey(post));
+            while(originalPost.isRewin()) {
+                originalPost = originalPost.getOriginalPost();
+            }
 
-            maxPostId = generatedId;
-            inserted = post.deepCopyAs();
-            postMap.put(inserted, inserted);
+            if(originalPost.getUsername().equals(post.getUsername())) {
+                postLock.unlock();
+                return UserSelfRewin;
+            }
+
+            post.setOriginalPost(originalPost);
         }
 
-        synchronized (cachedBlogs) {
-            cachedBlogs.get(post.getUsername())
-                    .add(0, inserted);
-            return Success;
-        }
+        do {
+            post.setId(generatedId++);
+        } while(postMap.containsKey(post));
+
+        maxPostId.set(generatedId);
+        inserted = post.deepCopyAs();
+        postMap.put(inserted, inserted);
+        postLock.unlock();
+
+        Lock blogLock = WinsomeHelper.acquireWriteLock(cachedBlogsRW);
+        cachedBlogs.get(post.getUsername())
+                .add(0, inserted);
+        blogLock.unlock();
+        return Success;
     }
 
     public Post getPost(int id) {
-        synchronized (postMap) {
-            Post post = postMap.get(new Post(id));
-            if(post != null)
-                return post.deepCopyAs();
-            return null;
-        }
+        Lock postLock = WinsomeHelper.acquireReadLock(postMapRW);
+        Post post = postMap.get(new Post(id));
+        postLock.unlock();
+
+        return post == null ? null : post.deepCopyAs();
     }
 
     public boolean removePost(int id) {
         List<Post> deletedPosts = new ArrayList<>();
 
-        synchronized (postMap) {
-            Post post = postMap.get(new Post(id));
-            if(post == null)
-                return false;
+        Lock postLock = WinsomeHelper.acquireWriteLock(postMapRW);
+        Post post = postMap.get(new Post(id));
+        if(post == null) {
+            postLock.unlock();
+            return false;
+        }
 
-            List<Integer> deletedCommentsId = new ArrayList<>();
-            if(!post.isRewin()) {
-                postMap.values().removeIf(p -> {
-                    if(p.isRewin() && p.getOriginalPost().getId() == id) {
-                        deletedPosts.add(p);
-                        for(Comment comment : p.getComments()) {
-                            deletedCommentsId.add(comment.getId());
-                        }
-                        return true;
+        List<Integer> deletedCommentsId = new ArrayList<>();
+        Lock commentLock = WinsomeHelper.acquireWriteLock(commentMapRW);
+        if(!post.isRewin()) {
+            postMap.values().removeIf(p -> {
+                if(p.isRewin() && p.getOriginalPost().getId() == id) {
+                    deletedPosts.add(p);
+                    for(Comment comment : p.getComments()) {
+                        deletedCommentsId.add(comment.getId());
                     }
-                    return false;
-                });
-            }
-
-            for(Comment comment : post.getComments()) {
-                deletedCommentsId.add(comment.getId());
-            }
-
-            if(deletedCommentsId.size() > 0) {
-                synchronized (commentMap) {
-                    for (Integer idComment : deletedCommentsId) {
-                        commentMap.remove(idComment);
-                    }
+                    return true;
                 }
-            }
-
-            postMap.remove(post);
-            deletedPosts.add(post);
+                return false;
+            });
         }
 
-        synchronized (cachedBlogs) {
-            for(Post post : deletedPosts) {
-                cachedBlogs.get(post.getUsername()).remove(post);
-            }
-            return true;
+        for(Comment comment : post.getComments()) {
+            deletedCommentsId.add(comment.getId());
         }
+
+        if(deletedCommentsId.size() > 0) {
+            for (Integer idComment : deletedCommentsId) {
+                commentMap.remove(idComment);
+            }
+        }
+        commentLock.unlock();
+
+        postMap.remove(post);
+        deletedPosts.add(post);
+        postLock.unlock();
+
+        Lock blogLock = WinsomeHelper.acquireWriteLock(cachedBlogsRW);
+        for(Post currentPost : deletedPosts) {
+            cachedBlogs.get(currentPost.getUsername()).remove(currentPost);
+        }
+        blogLock.unlock();
+        return true;
     }
 
     public boolean removePostIfOwner(int id, String from) throws NoAuthorizationException {
-        synchronized (postMap) {
-            Post post = postMap.get(new Post(id));
-            if(post == null)
-                return false;
-            if(!post.getUsername().equals(from))
-                throw new NoAuthorizationException(String.format("%s does not have permission to delete post %d", from, id));
-
-            List<Integer> deletedCommentsId = new ArrayList<>();
-            if(!post.isRewin()) {
-                postMap.values().removeIf(p -> {
-                    if(p.isRewin() && p.getOriginalPost().getId() == id) {
-                        for(Comment comment : p.getComments()) {
-                            deletedCommentsId.add(comment.getId());
-                        }
-                        return true;
-                    }
-                    return false;
-                });
-            }
-
-            for(Comment comment : post.getComments()) {
-                deletedCommentsId.add(comment.getId());
-            }
-
-            if(deletedCommentsId.size() > 0) {
-                synchronized (commentMap) {
-                    for (Integer idComment : deletedCommentsId) {
-                        commentMap.remove(idComment);
-                    }
-                }
-            }
-
-            postMap.remove(post);
-            return true;
+        Post post = getPost(id);
+        if(post == null) {
+            return false;
         }
+
+        if(!post.getUsername().equals(from)) {
+            throw new NoAuthorizationException(String.format("%s does not have permission to delete post %d", from, id));
+        }
+
+        return removePost(id);
     }
 
     public NetResponseType addVote(int entityId, VotableType type, VoteType vote, User user) {
         if(type == VotableType.Post) {
-            synchronized (postMap) {
-                Post post = postMap.get(new Post(entityId));
-                if(post == null) {
-                    return NetResponseType.EntityNotExists;
-                }
-
-                if(post.getUsername().equals(user.getUsername())) {
-                    return NetResponseType.UserSelfVote;
-                }
-
-                if(!user.hasUserFollowed(post.getUsername())) {
-                    return NetResponseType.PostNotInFeed;
-                }
-
-                if(post.getVote(user.getUsername()) != null) {
-                    return NetResponseType.UserAlreadyVoted;
-                }
-
-                post.addVote(user.getUsername(), vote);
-                return NetResponseType.Success;
+            Post post = getPost(entityId);
+            if(post == null) {
+                return NetResponseType.EntityNotExists;
             }
+
+            if(post.getUsername().equals(user.getUsername())) {
+                return NetResponseType.UserSelfVote;
+            }
+
+            if(!user.hasUserFollowed(post.getUsername())) {
+                return NetResponseType.PostNotInFeed;
+            }
+
+            if(post.getVote(user.getUsername()) != null) {
+                return NetResponseType.UserAlreadyVoted;
+            }
+
+            post.addVote(user.getUsername(), vote);
+            return NetResponseType.Success;
         } else if(type == VotableType.Comment) {
-            synchronized (commentMap) {
-                Comment comment = commentMap.get(entityId);
-                if(comment == null) {
-                    return NetResponseType.EntityNotExists;
-                }
-
-                if(comment.getOwner().equals(user.getUsername())) {
-                    return NetResponseType.UserSelfVote;
-                }
-
-                if(comment.getVote(user.getUsername()) != null) {
-                    return NetResponseType.UserAlreadyVoted;
-                }
-
-                comment.addVote(user.getUsername(), vote);
-                return NetResponseType.Success;
+            Comment comment = getComment(entityId);
+            if(comment == null) {
+                return NetResponseType.EntityNotExists;
             }
+
+            if(comment.getOwner().equals(user.getUsername())) {
+                return NetResponseType.UserSelfVote;
+            }
+
+            if(comment.getVote(user.getUsername()) != null) {
+                return NetResponseType.UserAlreadyVoted;
+            }
+
+            comment.addVote(user.getUsername(), vote);
+            return NetResponseType.Success;
         }
 
         return NetResponseType.InvalidParameters;
     }
 
-    public boolean hasPost(int id) {
-        synchronized (postMap) {
-            return postMap.containsKey(new Post(id));
-        }
-    }
-
     public NetResponseType addComment(Comment comment, User user) {
-        synchronized (postMap) {
-            Post targetPost = postMap.get(new Post(comment.getPostId()));
-            if(targetPost == null) {
-                return EntityNotExists;
-            }
-
-            if(targetPost.getUsername().equals(user.getUsername())) {
-                return UserSelfComment;
-            }
-
-            if(!user.hasUserFollowed(targetPost.getUsername())) {
-                return PostNotInFeed;
-            }
-
-            targetPost.addComment(comment);
-            synchronized (commentMap) {
-                int generatedId = maxCommentId;
-                do {
-                    generatedId++;
-                } while(commentMap.containsKey(generatedId));
-
-                comment.setId(generatedId);
-                commentMap.put(comment.getId(), comment.deepCopyAs());
-                maxCommentId = generatedId;
-                return Success;
-            }
+        Post targetPost = getPost(comment.getPostId());
+        if(targetPost == null) {
+            return EntityNotExists;
         }
-    }
 
+        if(targetPost.getUsername().equals(user.getUsername())) {
+            return UserSelfComment;
+        }
+
+        if(!user.hasUserFollowed(targetPost.getUsername())) {
+            return PostNotInFeed;
+        }
+
+        Lock commentLock = WinsomeHelper.acquireWriteLock(commentMapRW);
+        int generatedId = maxCommentId.get();
+        do {
+            generatedId++;
+        } while(commentMap.containsKey(generatedId));
+
+        comment.setId(generatedId);
+        Comment inserted = comment.deepCopyAs();
+        commentMap.put(comment.getId(), inserted);
+        maxCommentId.set(generatedId);
+        commentLock.unlock();
+
+        targetPost.addComment(inserted);
+        return Success;
+    }
+    
     public Comment getComment(int id) {
-        synchronized (commentMap) {
-            return commentMap.get(id).deepCopyAs();
-        }
-    }
+        Lock commentLock = WinsomeHelper.acquireReadLock(commentMapRW);
+        Comment comment = commentMap.get(id);
+        commentLock.unlock();
 
-    public boolean hasComment(int id) {
-        synchronized (commentMap) {
-            return commentMap.containsKey(id);
-        }
+        return comment;
     }
 
     public User getUserByUsername(String username) {
-        synchronized (registeredUsers) {
-            return registeredUsers.get(username);
-        }
+        Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+        User user = registeredUsers.get(username);
+        userLock.unlock();
+
+        return user;
     }
 
-    public boolean doUserExists(String username) {
-        synchronized (registeredUsers) {
-            return registeredUsers.containsKey(username);
-        }
+    public Map<String, User> getUsersResource() {
+        WinsomeHelper.acquireReadLock(registeredUsersRW);
+        return registeredUsers;
+    }
+
+    public void unlockUsers() {
+        registeredUsersRW.writeLock().unlock();
+    }
+
+    public Collection<Post> getPostsResource() {
+        WinsomeHelper.acquireReadLock(postMapRW);
+        return postMap.values();
+    }
+
+    public void unlockPosts() {
+        postMapRW.writeLock().unlock();
     }
 }

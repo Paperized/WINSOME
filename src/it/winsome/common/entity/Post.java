@@ -17,6 +17,7 @@ public class Post extends BaseVotableEntity {
     private Post originalPost;
     private Map<Comment, Comment> comments;
     private int totalComments;
+    int currentIteration = 0;
 
     public Post() {
         this(-1);
@@ -159,5 +160,11 @@ public class Post extends BaseVotableEntity {
                 '}';
     }
 
+    public int getCurrentIteration() {
+        return currentIteration;
+    }
 
+    public void setCurrentIteration(int currentIteration) {
+        this.currentIteration = currentIteration;
+    }
 }

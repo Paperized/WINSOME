@@ -15,7 +15,8 @@ public enum NetMessageType {
     RatePost(11),
     RateComment(12),
     CreateComment(13),
-    ViewBlog(14);
+    ViewBlog(14),
+    NotifyWallet(15);
 
     private final int id;
     NetMessageType(int id) {

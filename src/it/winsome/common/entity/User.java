@@ -11,6 +11,9 @@ public class User implements Serializable, Cloneable {
     private Set<String> tagsInterests;
     private Set<String> usersFollowed;
     private Set<String> usersFollowing;
+    private boolean walletBTCupdated = true;
+    private double walletSize;
+    private double walletSizeBTC;
 
     public User() {
         tagsInterests = new HashSet<>();
@@ -146,6 +149,28 @@ public class User implements Serializable, Cloneable {
 
     public Set<String> getFollowing() {
         return Collections.unmodifiableSet(usersFollowing);
+    }
+
+    public boolean isWalletBTCupdated() {
+        return walletBTCupdated;
+    }
+
+    public double getWalletSizeBTC() {
+        return walletSizeBTC;
+    }
+
+    public void setWalletSizeBTC(double walletSizeBTC) {
+        this.walletSizeBTC = walletSizeBTC;
+        walletBTCupdated = true;
+    }
+
+    public double addWalletAmount(double amount) {
+        if(amount != 0) walletBTCupdated = false;
+        return walletSize += amount;
+    }
+
+    public double getWalletSize() {
+        return walletSize;
     }
 
     @Override
