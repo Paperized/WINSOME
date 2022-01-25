@@ -11,12 +11,21 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
+/**
+ * Used to retrieve the client configuration from disk and to create an initial one
+ */
 public class ClientConfiguration {
     public String rmiServiceName = "serviceName";
     public int rmiServicePort = 6000;
     public String serverTcpAddress = "127.0.0.1";
     public int serverTcpPort = 5959;
+    public String multicastIp = "237.0.10.10";
+    public int multicastPort = 10909;
 
+    /**Load a configuration from a path
+     * @param path path of the json file
+     * @throws IOException if the file does not exist
+     */
     public void loadFromJson(String path) throws IOException {
         Gson gson = new GsonBuilder().create();
         String jsonPost = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
@@ -25,8 +34,15 @@ public class ClientConfiguration {
         rmiServicePort = config.rmiServicePort;
         serverTcpAddress = config.serverTcpAddress;
         serverTcpPort = config.serverTcpPort;
+        multicastIp = config.multicastIp;
+        multicastPort = config.multicastPort;
     }
 
+
+    /**Generated a template configuration located at path
+     * @param path path of a file
+     * @return true if the default configuration was generated
+     */
     public static boolean generateDefaultFile(String path) {
         Gson gsonPost = new GsonBuilder()
                 .setPrettyPrinting()

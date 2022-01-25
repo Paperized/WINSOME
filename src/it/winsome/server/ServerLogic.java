@@ -3,41 +3,41 @@ package it.winsome.server;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
+import it.winsome.common.SynchronizedObject;
 import it.winsome.common.WinsomeHelper;
-import it.winsome.common.entity.Comment;
-import it.winsome.common.entity.Post;
-import it.winsome.common.entity.User;
-import it.winsome.common.entity.abstracts.BaseSocialEntity;
+import it.winsome.common.entity.*;
+import it.winsome.common.entity.enums.CurrencyType;
 import it.winsome.common.entity.enums.VotableType;
 import it.winsome.common.entity.enums.VoteType;
 import it.winsome.common.exception.*;
 import it.winsome.common.json.JsonDeserializeEmptyMap;
 import it.winsome.common.json.JsonSerializeMapIdOnly;
 import it.winsome.common.network.enums.NetResponseType;
-import it.winsome.common.service.interfaces.UserService;
-import it.winsome.common.service.interfaces.UserCallback;
+import it.winsome.common.service.interfaces.UserCallbackClient;
+import it.winsome.server.session.ConnectionSession;
 
 import java.io.*;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLConnection;
 import java.nio.channels.SelectionKey;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Paths;
 import java.rmi.RemoteException;
-import java.rmi.server.UnicastRemoteObject;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.stream.Collectors;
 
 import static it.winsome.common.network.enums.NetResponseType.*;
 
-public class UserServiceImpl extends UnicastRemoteObject implements UserService {
+public class ServerLogic {
     private final Map<String, User> registeredUsers;
     private final ReadWriteLock registeredUsersRW;
-    private final Map<String, UserCallback> registeredCallbacks;
+    private final Map<String, UserCallbackClient> registeredCallbacks;
     private final Map<String, SelectionKey> currentSessions;
     private final ReadWriteLock currentSessionsRW;
     private final Map<String, LinkedList<Post>> cachedBlogs;
@@ -45,19 +45,23 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
     private final AtomicInteger maxPostId;
     private final Map<Post, Post> postMap;
+    private final List<Post> postList;
     private final ReadWriteLock postMapRW;
     private final AtomicInteger maxCommentId;
     private final Map<Integer, Comment> commentMap;
     private final ReadWriteLock commentMapRW;
 
     private final String dataFolder;
+    private final URL btcConverterURL;
+    private boolean initialized;
 
-    public UserServiceImpl(String dataFolder) throws RemoteException {
+    public ServerLogic(String dataFolder) throws MalformedURLException {
         super();
         this.dataFolder = dataFolder;
         registeredCallbacks = new HashMap<>();
         registeredUsers = new HashMap<>();
         postMap = new LinkedHashMap<>();
+        postList = new ArrayList<>();
         commentMap = new HashMap<>();
         currentSessions = new HashMap<>();
         cachedBlogs = new HashMap<>();
@@ -71,10 +75,16 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         commentMapRW = new ReentrantReadWriteLock();
         currentSessionsRW = new ReentrantReadWriteLock();
 
-        if(loadFromDisk()) {
-            WinsomeHelper.printlnDebug("Data loaded succesfully!");
-        } else {
-            WinsomeHelper.printlnDebug("Error during data loading, partial data might be loaded!");
+        btcConverterURL = new URL("https://www.random.org/decimal-fractions/?num=1&dec=10&col=1&format=plain&rnd=new");
+
+        try {
+            if(loadFromDisk()) {
+                WinsomeHelper.printlnDebug("Data loaded succesfully!");
+            } else {
+                WinsomeHelper.printlnDebug("Error during data loading, partial data might be loaded!");
+            }
+        } catch (DataAlreadyLoadedException e) {
+            e.printStackTrace();
         }
     }
 
@@ -86,7 +96,11 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
                 .create();
 
         Lock rLock = WinsomeHelper.acquireReadLock(postMapRW);
+        WinsomeHelper.prepareReadCollection(postMap.values());
         String jsonPost = gsonPost.toJson(postMap.values());
+        WinsomeHelper.releaseReadCollection(postMap.values());
+        rLock.unlock();
+
         File postFile = new File(dataFolder + "posts.json");
         try {
             postFile.getParentFile().mkdirs();
@@ -102,14 +116,17 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             e.printStackTrace();
             allCompleted = false;
         }
-        rLock.unlock();
 
         Gson gson = new GsonBuilder()
                 .setPrettyPrinting()
                 .create();
 
         rLock = WinsomeHelper.acquireReadLock(commentMapRW);
+        WinsomeHelper.prepareReadCollection(commentMap.values());
         String jsonComment = gson.toJson(commentMap.values());
+        WinsomeHelper.releaseReadCollection(commentMap.values());
+        rLock.unlock();
+
         File commentFile = new File(dataFolder + "comments.json");
         try {
             commentFile.createNewFile();
@@ -124,10 +141,13 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             e.printStackTrace();
             allCompleted = false;
         }
-        rLock.unlock();
 
         rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+        WinsomeHelper.prepareReadCollection(registeredUsers.values());
         String jsonUser = gson.toJson(registeredUsers.values());
+        WinsomeHelper.releaseReadCollection(registeredUsers.values());
+        rLock.unlock();
+
         File userFile = new File(dataFolder + "users.json");
         try {
             userFile.createNewFile();
@@ -142,12 +162,13 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             e.printStackTrace();
             allCompleted = false;
         }
-        rLock.unlock();
 
         return allCompleted;
     }
 
-    public synchronized boolean loadFromDisk() {
+    public synchronized boolean loadFromDisk() throws DataAlreadyLoadedException {
+        if(initialized) throw new DataAlreadyLoadedException();
+        initialized = true;
         boolean allCompleted = true;
         Gson gsonPost = new GsonBuilder()
                 .registerTypeAdapter(Map.class, new JsonDeserializeEmptyMap<Comment, Comment>())
@@ -215,6 +236,19 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             }
         }
 
+        //enable synchronization and create blogs
+        registeredUsers.forEach((k, v) -> {
+            v.enableSynchronization(true);
+            cachedBlogs.put(k, new LinkedList<>());
+        });
+
+        postMap.forEach((k, v) -> {
+            cachedBlogs.get(v.getUsername()).add(v);
+            postList.add(v);
+            v.enableSynchronization(true);
+        });
+        commentMap.forEach((k, v) -> v.enableSynchronization(true));
+
         return allCompleted;
     }
 
@@ -239,14 +273,14 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         addPost(p);
         Comment c = new Comment(-1, "piero", "Bel post niente da dire");
         c.setPostId(p.getId());
-        c.addVote("ghfjy787", VoteType.UP);
+        c.addVote(new Vote("ghfjy787", VoteType.UP));
         addComment(c, registeredUsers.get("piero"));
         c = new Comment(-1, "ghfjy787", "Non saprei meh..");
         c.setPostId(p.getId());
-        c.addVote("piero", VoteType.UP);
+        c.addVote(new Vote("piero", VoteType.UP));
         addComment(c, registeredUsers.get("ghfjy787"));
         c = new Comment(-1, "piero", "Bel post niente da dire");
-        c.addVote("ghfjy787", VoteType.UP);
+        c.addVote(new Vote("ghfjy787", VoteType.UP));
         addComment(c, registeredUsers.get("piero"));
         Post rewin = new Post(-1, "piero", "GIANMARCO MA COSA DICI PORCODDIOOOOO!", "VA IN MONA CO YOUTUBE!");
         rewin.setOriginalPost(new Post(p.getId()));
@@ -256,13 +290,13 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         addPost(p);
         c = new Comment(-1, "piero", "Bel post niente da dire");
         c.setPostId(p.getId());
-        c.addVote("ghfjy787", VoteType.UP);
+        c.addVote(new Vote("ghfjy787", VoteType.UP));
         addComment(c, registeredUsers.get("piero"));
         c = new Comment(-1, "piero", "Bel post niente da dire");
-        c.addVote("ghfjy787", VoteType.UP);
+        c.addVote(new Vote("ghfjy787", VoteType.UP));
         addComment(c, registeredUsers.get("piero"));
         c = new Comment(-1, "piero", "Bel post niente da dire");
-        c.addVote("ghfjy787", VoteType.UP);
+        c.addVote(new Vote("ghfjy787", VoteType.UP));
         addComment(c, registeredUsers.get("piero"));
         addPost(new Post(-1, "ghfjy787", "IDRATARSI BENE", "HO SETEEEEEE"));
         rewin = new Post(-1, "ghfjy787", "Pierino ancora una volta dice cagate!", null);
@@ -275,8 +309,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         saveToDisk();
     }
 
-    @Override
-    public User registerUser(String username, String password, String[] tags) throws RemoteException, UserAlreadyExistsException, NoTagsFoundException {
+    public User registerUser(String username, String password, String[] tags) throws UserAlreadyExistsException, NoTagsFoundException {
         username = WinsomeHelper.normalizeUsername(username);
         User user = new User(username, password, tags);
         if(!user.hasAnyTag()) {
@@ -293,8 +326,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         return user;
     }
 
-    @Override
-    public void registerUserCallback(String username, UserCallback callbackObject) throws RemoteException, UserNotExistsException {
+    public void registerUserCallback(String username, UserCallbackClient callbackObject) throws UserNotExistsException {
         username = WinsomeHelper.normalizeUsername(username);
         Lock rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
         boolean userExist = registeredUsers.containsKey(username);
@@ -313,8 +345,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         }
     }
 
-    @Override
-    public void unregisterUserCallback(String username, UserCallback callbackObject) throws RemoteException, UserNotExistsException {
+    public void unregisterUserCallback(String username, UserCallbackClient callbackObject) throws UserNotExistsException {
         username = WinsomeHelper.normalizeUsername(username);
         Lock rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
         boolean userExist = registeredUsers.containsKey(username);
@@ -329,21 +360,14 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         }
     }
 
-    public boolean hasSession(String username) {
-        synchronized (currentSessions) {
-            return currentSessions.get(username) != null;
-        }
-    }
-
     public boolean removeSession(SelectionKey caller) {
         if(caller == null) throw new NullPointerException("Caller cannot be null");
-        User current = (User) caller.attachment();
+        User current = ((ConnectionSession) caller.attachment()).getUserLogged();
         if(current != null) {
-            caller.attach(null);
+            ((ConnectionSession)caller.attachment()).setUserLogged(null);
             Lock rLock = WinsomeHelper.acquireReadLock(currentSessionsRW);
             boolean wasRemoved = currentSessions.remove(current.getUsername()) != null;
             rLock.unlock();
-            caller.attach(null);
             return wasRemoved;
         }
 
@@ -359,18 +383,25 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
         Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
         User user = registeredUsers.get(username);
-        if(user == null) {
+        User userCopy;
+        if(user != null) {
+            user.prepareRead();
+            if(!password.equals(user.getPassword())) {
+                user.releaseRead();
+                WinsomeHelper.releaseAllLocks(sessionLock, userLock);
+                return NetResponseType.WrongPassword;
+            }
+            userCopy = user.deepCopy();
+            user.releaseRead();
+        } else {
             WinsomeHelper.releaseAllLocks(sessionLock, userLock);
             return NetResponseType.UsernameNotExists;
-        } else if(!password.equals(user.getPassword())) {
-            WinsomeHelper.releaseAllLocks(sessionLock, userLock);
-            return NetResponseType.WrongPassword;
         }
 
         currentSessions.put(username, caller);
-        sessionLock.unlock();
         userLock.unlock();
-        caller.attach(user);
+        sessionLock.unlock();
+        ((ConnectionSession)caller.attachment()).setUserLogged(userCopy);
 
         Lock blogLock = WinsomeHelper.acquireWriteLock(cachedBlogsRW);
         cachedBlogs.putIfAbsent(username, new LinkedList<>());
@@ -381,7 +412,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
     public void notifyFollowAdded(String from, String to) throws RemoteException, NullPointerException {
         synchronized (registeredCallbacks) {
-            UserCallback cb = registeredCallbacks.get(to);
+            UserCallbackClient cb = registeredCallbacks.get(to);
             if(cb != null) {
                 cb.onFollowReceived(from);
             }
@@ -390,9 +421,70 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
     public void notifyFollowRemoved(String from, String to) throws RemoteException, NullPointerException {
         synchronized (registeredCallbacks) {
-            UserCallback cb = registeredCallbacks.get(to);
+            UserCallbackClient cb = registeredCallbacks.get(to);
             if(cb != null) {
                 cb.onFollowRemoved(from);
+            }
+        }
+    }
+
+    public NetResponseType addFollow(String from, String to) {
+        if(from.equalsIgnoreCase(to)) {
+            return UserSelfFollow;
+        } else {
+            User followedUser = getRealUserByUsername(to);
+            if(followedUser == null) {
+                return UsernameNotExists;
+            } else {
+                User fromUser = getRealUserByUsername(from);
+                SynchronizedObject.prepareInWriteMode(fromUser);
+                fromUser.addUserFollowed(to);
+                fromUser.releaseWrite();
+
+                SynchronizedObject.prepareInWriteMode(followedUser);
+                if(followedUser.addUserFollowing(from)) {
+                    followedUser.releaseWrite();
+
+                    try {
+                        notifyFollowAdded(from, to);
+                    } catch (RemoteException e) {
+                        e.printStackTrace();
+                    }
+                }
+                followedUser.releaseWrite();
+                return Success;
+            }
+        }
+    }
+
+    public NetResponseType removeFollow(String from, String to) {
+        if(from.equalsIgnoreCase(to)) {
+            return UserSelfFollow;
+        } else {
+            User followedUser = getRealUserByUsername(to);
+            if(followedUser == null) {
+                return UsernameNotExists;
+            } else {
+                User fromUser = getRealUserByUsername(from);
+                SynchronizedObject.prepareInWriteMode(fromUser);
+                if(!fromUser.removeUserFollowed(to)) {
+                    fromUser.releaseWrite();
+                    return UserNotFollowed;
+                }
+                else {
+                    fromUser.releaseWrite();
+                    SynchronizedObject.prepareInWriteMode(followedUser);
+                    if(followedUser.removeUserFollowing(from)) {
+                        followedUser.releaseWrite();
+                        try {
+                            notifyFollowRemoved(from, to);
+                        } catch (RemoteException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                    followedUser.releaseWrite();
+                    return Success;
+                }
             }
         }
     }
@@ -406,26 +498,37 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         userLock.unlock();
 
         if(user == null) return null;
-        int startFrom = page * pageSize;
-        int endAt = startFrom + pageSize;
         List<Post> posts = new ArrayList<>();
-        int postIndex = 0;
 
         Lock postLock = WinsomeHelper.acquireReadLock(postMapRW);
-        if(startFrom > postMap.size())
+        if(postList.size() == 0) {
+            postLock.unlock();
             return posts;
-
-        for(Map.Entry<Post, Post> entry : postMap.entrySet()) {
-            if(postIndex++ < startFrom) continue;
-            Post currentPost = entry.getValue();
-            if(!currentPost.getUsername().equals(username) && user.hasUserFollowed(currentPost.getUsername())) {
-                posts.add(currentPost.deepCopyAs());
-            }
-
-            if(postIndex == endAt) {
-                break;
-            }
         }
+
+        int postToSkip = page * pageSize;
+        int postSkipped = 0;
+        int postAdded = 0;
+
+        user.prepareRead();
+        for(int i = postList.size() - 1; i >= 0; i--) {
+            Post post = postList.get(i);
+            post.prepareRead();
+            if(!post.getUsername().equals(username) && user.hasUserFollowed(post.getUsername())) {
+                if(postSkipped < postToSkip) {
+                    postSkipped++;
+                } else {
+                    postAdded++;
+                    posts.add(post.deepCopyAs());
+                    if(postAdded == pageSize) {
+                        post.releaseRead();
+                        break;
+                    }
+                }
+            }
+            post.releaseRead();
+        }
+        user.releaseRead();
         postLock.unlock();
 
         return posts;
@@ -443,8 +546,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
             return new ArrayList<>();
 
         int toIndex = Math.min(curr.size(), endPage);
-        result = curr.subList(pageStart, toIndex).stream().map(BaseSocialEntity::<Post>deepCopyAs)
-                    .collect(Collectors.toList());
+        result = WinsomeHelper.deepCopySynchronizedList(curr.subList(pageStart, toIndex).stream());
         blogLock.unlock();
         return result;
     }
@@ -454,41 +556,46 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
         Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
         for (User user : registeredUsers.values()) {
-            if(user.getUsername().equals(skipUsername)) continue;
-            if(user.hasSimilarTags(tags)) {
-                try {
-                    similarUsers.add((User) user.clone());
-                } catch (CloneNotSupportedException e) {
-                    e.printStackTrace();
-                }
+            user.prepareRead();
+            if(user.getUsername().equals(skipUsername)) {
+                user.releaseRead();
+                continue;
             }
+
+            if(user.hasSimilarTags(tags)) {
+                similarUsers.add(user.deepCopy());
+            }
+            user.releaseRead();
         }
         userLock.unlock();
         return similarUsers;
     }
 
     public NetResponseType addPost(Post post) {
-        int generatedId = maxPostId.get();
         Post inserted;
+        Post realOriginalPost = null;
 
         Lock postLock = WinsomeHelper.acquireWriteLock(postMapRW);
+        int generatedId = maxPostId.get();
         if(post.isRewin()) {
-            Post originalPost = postMap.get(post.getOriginalPost());
-            if(originalPost == null) {
+            realOriginalPost = postMap.get(post.getOriginalPost());
+            if(realOriginalPost == null) {
                 postLock.unlock();
                 return OriginalPostNotExists;
             }
 
-            while(originalPost.isRewin()) {
-                originalPost = originalPost.getOriginalPost();
+            realOriginalPost.prepareRead();
+            while(realOriginalPost.isRewin()) {
+                realOriginalPost = realOriginalPost.getOriginalPost();
             }
 
-            if(originalPost.getUsername().equals(post.getUsername())) {
+            if(realOriginalPost.getUsername().equals(post.getUsername())) {
+                realOriginalPost.releaseRead();
                 postLock.unlock();
                 return UserSelfRewin;
             }
 
-            post.setOriginalPost(originalPost);
+            realOriginalPost.releaseRead();
         }
 
         do {
@@ -497,7 +604,10 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
         maxPostId.set(generatedId);
         inserted = post.deepCopyAs();
+        inserted.setOriginalPost(realOriginalPost);
         postMap.put(inserted, inserted);
+        postList.add(inserted);
+        inserted.enableSynchronization(true);
         postLock.unlock();
 
         Lock blogLock = WinsomeHelper.acquireWriteLock(cachedBlogsRW);
@@ -512,7 +622,22 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         Post post = postMap.get(new Post(id));
         postLock.unlock();
 
-        return post == null ? null : post.deepCopyAs();
+        if(post != null) {
+            post.prepareRead();
+            Post temp = post;
+            post = post.deepCopyAs();
+            temp.releaseRead();
+        }
+
+        return post;
+    }
+
+    private Post getRealPost(int id) {
+        Lock postLock = WinsomeHelper.acquireReadLock(postMapRW);
+        Post post = postMap.get(new Post(id));
+        postLock.unlock();
+
+        return post;
     }
 
     public boolean removePost(int id) {
@@ -527,22 +652,38 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
         List<Integer> deletedCommentsId = new ArrayList<>();
         Lock commentLock = WinsomeHelper.acquireWriteLock(commentMapRW);
+        post.prepareRead();
         if(!post.isRewin()) {
             postMap.values().removeIf(p -> {
-                if(p.isRewin() && p.getOriginalPost().getId() == id) {
-                    deletedPosts.add(p);
-                    for(Comment comment : p.getComments()) {
-                        deletedCommentsId.add(comment.getId());
+                p.prepareRead();
+                if(p.isRewin()) {
+                    Post originalP = p.getOriginalPost();
+                    originalP.prepareRead();
+                    if(originalP.getId() == id) {
+                        deletedPosts.add(p);
+                        for(Comment comment : p.getComments()) {
+                            comment.prepareRead();
+                            deletedCommentsId.add(comment.getId());
+                            comment.releaseRead();
+                        }
+
+                        originalP.releaseRead();
+                        p.releaseRead();
+                        return true;
                     }
-                    return true;
+                    originalP.releaseRead();
                 }
+                p.releaseRead();
                 return false;
             });
         }
 
         for(Comment comment : post.getComments()) {
+            comment.prepareRead();
             deletedCommentsId.add(comment.getId());
+            comment.releaseRead();
         }
+        post.releaseRead();
 
         if(deletedCommentsId.size() > 0) {
             for (Integer idComment : deletedCommentsId) {
@@ -551,67 +692,97 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         }
         commentLock.unlock();
 
-        postMap.remove(post);
         deletedPosts.add(post);
+        for(Post currentPost : deletedPosts) {
+            postMap.remove(currentPost);
+            postList.remove(currentPost);
+        }
         postLock.unlock();
 
         Lock blogLock = WinsomeHelper.acquireWriteLock(cachedBlogsRW);
         for(Post currentPost : deletedPosts) {
+            currentPost.prepareRead();
             cachedBlogs.get(currentPost.getUsername()).remove(currentPost);
+            currentPost.releaseRead();
         }
         blogLock.unlock();
         return true;
     }
 
     public boolean removePostIfOwner(int id, String from) throws NoAuthorizationException {
-        Post post = getPost(id);
+        Post post = getRealPost(id);
         if(post == null) {
             return false;
         }
 
+        post.prepareRead();
         if(!post.getUsername().equals(from)) {
+            post.releaseRead();
             throw new NoAuthorizationException(String.format("%s does not have permission to delete post %d", from, id));
         }
 
+        post.releaseRead();
         return removePost(id);
     }
 
     public NetResponseType addVote(int entityId, VotableType type, VoteType vote, User user) {
         if(type == VotableType.Post) {
-            Post post = getPost(entityId);
+            Post post = getRealPost(entityId);
             if(post == null) {
                 return NetResponseType.EntityNotExists;
             }
 
+            post.prepareRead();
+            user.prepareRead();
             if(post.getUsername().equals(user.getUsername())) {
+                post.releaseRead();
+                user.releaseRead();
                 return NetResponseType.UserSelfVote;
             }
 
             if(!user.hasUserFollowed(post.getUsername())) {
+                post.releaseRead();
+                user.releaseRead();
                 return NetResponseType.PostNotInFeed;
             }
 
             if(post.getVote(user.getUsername()) != null) {
+                post.releaseRead();
+                user.releaseRead();
                 return NetResponseType.UserAlreadyVoted;
             }
 
-            post.addVote(user.getUsername(), vote);
+            Vote voteEntity = new Vote(user.getUsername(), vote);
+            post.addVote(voteEntity);
+            voteEntity.enableSynchronization(true);
+            post.releaseRead();
+            user.releaseRead();
             return NetResponseType.Success;
         } else if(type == VotableType.Comment) {
-            Comment comment = getComment(entityId);
+            Comment comment = getRealComment(entityId);
             if(comment == null) {
                 return NetResponseType.EntityNotExists;
             }
 
+            comment.prepareRead();
+            user.prepareRead();
             if(comment.getOwner().equals(user.getUsername())) {
+                comment.releaseRead();
+                user.releaseRead();
                 return NetResponseType.UserSelfVote;
             }
 
             if(comment.getVote(user.getUsername()) != null) {
+                comment.releaseRead();
+                user.releaseRead();
                 return NetResponseType.UserAlreadyVoted;
             }
 
-            comment.addVote(user.getUsername(), vote);
+            Vote voteEntity = new Vote(user.getUsername(), vote);
+            comment.addVote(voteEntity);
+            voteEntity.enableSynchronization(true);
+            comment.releaseRead();
+            user.releaseRead();
             return NetResponseType.Success;
         }
 
@@ -619,18 +790,25 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
     }
 
     public NetResponseType addComment(Comment comment, User user) {
-        Post targetPost = getPost(comment.getPostId());
+        Post targetPost = getRealPost(comment.getPostId());
         if(targetPost == null) {
             return EntityNotExists;
         }
 
+        SynchronizedObject.prepareInWriteMode(targetPost);
+        user.prepareRead();
         if(targetPost.getUsername().equals(user.getUsername())) {
+            user.releaseRead();
+            targetPost.releaseWrite();
             return UserSelfComment;
         }
 
         if(!user.hasUserFollowed(targetPost.getUsername())) {
+            user.releaseRead();
+            targetPost.releaseWrite();
             return PostNotInFeed;
         }
+        user.releaseRead();
 
         Lock commentLock = WinsomeHelper.acquireWriteLock(commentMapRW);
         int generatedId = maxCommentId.get();
@@ -640,15 +818,33 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
 
         comment.setId(generatedId);
         Comment inserted = comment.deepCopyAs();
-        commentMap.put(comment.getId(), inserted);
+        commentMap.put(generatedId, inserted);
         maxCommentId.set(generatedId);
-        commentLock.unlock();
 
         targetPost.addComment(inserted);
+        inserted.enableSynchronization(true);
+
+        commentLock.unlock();
+        targetPost.releaseWrite();
         return Success;
     }
-    
+
     public Comment getComment(int id) {
+        Lock commentLock = WinsomeHelper.acquireReadLock(commentMapRW);
+        Comment comment = commentMap.get(id);
+        commentLock.unlock();
+
+        if(comment != null) {
+            comment.releaseRead();
+            Comment temp = comment;
+            comment = comment.deepCopyAs();
+            temp.releaseRead();
+        }
+
+        return comment;
+    }
+
+    private Comment getRealComment(int id) {
         Lock commentLock = WinsomeHelper.acquireReadLock(commentMapRW);
         Comment comment = commentMap.get(id);
         commentLock.unlock();
@@ -656,12 +852,52 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
         return comment;
     }
 
-    public User getUserByUsername(String username) {
+    public Wallet getWallet(String username, CurrencyType currency) throws IOException {
+        Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+        if(!registeredUsers.containsKey(username)) {
+            userLock.unlock();
+            return null;
+        }
+
+        User user = registeredUsers.get(username);
+        user.prepareRead();
+        Wallet wallet = user.getWallet();
+        user.releaseRead();
+        userLock.unlock();
+
+        if(currency == CurrencyType.Bitcoin) {
+            URLConnection urlConnection = btcConverterURL.openConnection();
+            urlConnection.connect();
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(urlConnection.getInputStream()));
+            String multiplier = reader.readLine();
+            reader.close();
+            double multiplierDouble = Double.parseDouble(multiplier.trim());
+            SynchronizedObject.prepareInWriteMode(wallet);
+            wallet.setRateInBTC(multiplierDouble);
+            wallet.downgradeToRead();
+        }
+
+        wallet.prepareRead();
+        Wallet copy = wallet.deepCopyByCurrency(currency);
+        wallet.releaseRead();
+        return copy;
+    }
+
+    public User getRealUserByUsername(String username) {
         Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
         User user = registeredUsers.get(username);
         userLock.unlock();
 
         return user;
+    }
+
+    public boolean doUserExists(String username) {
+        Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+        boolean res = registeredUsers.containsKey(username);
+        userLock.unlock();
+
+        return res;
     }
 
     public Map<String, User> getUsersResource() {
@@ -670,7 +906,7 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
     }
 
     public void unlockUsers() {
-        registeredUsersRW.writeLock().unlock();
+        registeredUsersRW.readLock().unlock();
     }
 
     public Collection<Post> getPostsResource() {
@@ -679,6 +915,6 @@ public class UserServiceImpl extends UnicastRemoteObject implements UserService 
     }
 
     public void unlockPosts() {
-        postMapRW.writeLock().unlock();
+        postMapRW.readLock().unlock();
     }
 }

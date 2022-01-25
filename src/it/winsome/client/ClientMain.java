@@ -1,816 +1,216 @@
 package it.winsome.client;
 
-import it.winsome.client.config.ClientConfiguration;
-import it.winsome.common.dto.*;
-import it.winsome.common.entity.Post;
-import it.winsome.common.entity.User;
-import it.winsome.common.entity.enums.VotableType;
-import it.winsome.common.entity.enums.VoteType;
-import it.winsome.common.exception.NoTagsFoundException;
-import it.winsome.common.exception.SocketDisconnectedException;
-import it.winsome.common.exception.UserAlreadyExistsException;
-import it.winsome.common.exception.UserNotExistsException;
-import it.winsome.common.network.NetMessage;
-import it.winsome.common.network.enums.NetConnectionType;
-import it.winsome.common.network.enums.NetMessageType;
-import it.winsome.common.network.enums.NetResponseType;
-import it.winsome.common.service.interfaces.UserCallback;
-import it.winsome.common.service.interfaces.UserService;
+import it.winsome.common.Pair;
 import it.winsome.common.WinsomeHelper;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.nio.file.NoSuchFileException;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
-import java.rmi.registry.LocateRegistry;
-import java.rmi.registry.Registry;
-import java.rmi.server.UnicastRemoteObject;
-import java.util.Arrays;
-import java.util.Iterator;
+import java.security.InvalidParameterException;
+import java.util.ArrayList;
+import java.util.List;
 
 public class ClientMain {
-    private static final String err_command_args_count_eq = "%s needs %d arguments to be executed";
-    private static final String err_command_args_count_ge = "%s needs atleast %d arguments to be executed";
-    private static final String err_command_not_exists = "Command '%s' not exists";
-
-    private final static BufferedReader reader =
+    private static final BufferedReader reader =
             new BufferedReader(new InputStreamReader(System.in));
-    private final static ClientConnector clientConnector = new ClientConnector();
-    private static NetMessage cachedMessage;
 
-    private static final ClientSocialState clientState = new ClientSocialState();
-    private static User currentUser;
-
-    private static final ClientConfiguration configuration = new ClientConfiguration();
-
-    public static void main(String[] args) throws RemoteException, NotBoundException {
+    public static void main(String[] args) throws Exception {
         WinsomeHelper.setDebugMode(true);
-        Runtime.getRuntime().addShutdownHook(new Thread(ClientMain::onQuit));
-
+        ClientApplication app = new ClientApplication();
         try {
-            configuration.loadFromJson("./client_config.json");
-            WinsomeHelper.printlnDebug("Loaded client configuration successfully!");
+            app.loadConfiguration("client_config.json");
         } catch (IOException e) {
-            if((e instanceof NoSuchFileException)) {
-                printError("Configuration not found at path ./client_config.json!");
-                if(ClientConfiguration.generateDefaultFile("./client_config.json")) {
-                    printError("Generated a client configuration template!");
-                }
-            } else {
-                e.printStackTrace();
-            }
+            e.printStackTrace();
             return;
         }
 
-        Registry r = LocateRegistry.getRegistry(configuration.rmiServicePort);
-        UserService regUserSrv = (UserService) r.lookup(configuration.rmiServiceName);
-
-        String command = "";
-        boolean isClosing = false;
-
-        System.out.println("------ WINSOME Client -------");
-
-        while (!isClosing && (command = readLine()) != null) {
-            String[] commandSplitted = command.split(" ");
-            switch (commandSplitted[0]) {
-                case "test": {
-                    if(!checkParamsEqCount(commandSplitted, 0)) continue;
-                    try {
-                        String psw = WinsomeHelper.generateFromSHA256("download99");
-                        User newUser = regUserSrv.registerUser("ghfjy787", psw, new String[] { "pesca", "programmazione", "film", "LoL", "youtube", "anime", "manga" });
-                        WinsomeHelper.printlnDebug(newUser.toString());
-                        newUser = regUserSrv.registerUser("pippo99", psw, new String[] { "LoL", "agricoltura", "vino", "manga" });
-                        WinsomeHelper.printlnDebug(newUser.toString());
-                        newUser = regUserSrv.registerUser("gianmarco", psw, new String[] { "Film", "programmazione", "LoL", "youtube" });
-                        WinsomeHelper.printlnDebug(newUser.toString());
-                        newUser = regUserSrv.registerUser("piero", psw, new String[] { "crypto", "youtube", "film" });
-                        WinsomeHelper.printlnDebug(newUser.toString());
-                        newUser = regUserSrv.registerUser("claoclao", psw, new String[] { "anime", "manga", "un cazzo" });
-                        WinsomeHelper.printlnDebug(newUser.toString());
-                    } catch (Exception ex) {
-                        printResponse(ex.toString());
-                    }
-
-                    break;
-                } // done
-                case "register": {
-                    if(!checkParamsGeCount(commandSplitted, 3)) continue;
-                    String username = commandSplitted[1];
-                    String password = WinsomeHelper.generateFromSHA256(commandSplitted[2]);
-                    String[] tags = Arrays.copyOfRange(commandSplitted, 3, commandSplitted.length);
-
-                    try {
-                        User createdUser = regUserSrv.registerUser(username, password, tags);
-                        WinsomeHelper.printlnDebug(createdUser.toString());
-                    } catch (UserAlreadyExistsException ex) {
-                        printResponse("Username %s already exists!", username);
-                    } catch(NoTagsFoundException ex) {
-                        printResponse("Atleast 1 tag is needed!");
-                    }
-
-                    break;
-                } // done
-                case "login": {
-                    if(!checkParamsEqCount(commandSplitted, 2)) continue;
-                    String username = commandSplitted[1];
-                    String password = WinsomeHelper.generateFromSHA256(commandSplitted[2]);
-
-                    if(clientState.isLoggedIn()) {
-                        printError("You are already logged in, logout from your current session!");
-                        break;
-                    }
-
-                    if(!clientConnector.isConnected()) {
-                        if(!clientConnector.connect(configuration.serverTcpAddress, configuration.serverTcpPort)) {
-                            printError("Could not connect to server!");
-                            break;
-                        }
-                    }
-
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.Login,
-                            NetMessage.getStringSize(username, password))
-                            .writeString(username)
-                            .writeString(password);
-
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.Login) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.UsernameNotExists) {
-                                printError("Username does not exists, register yourself with 'register'!");
-                            } else if(result == NetResponseType.WrongPassword) {
-                                printError("Password is invalid!");
-                            } else if(result == NetResponseType.ClientAlreadyLoggedIn) {
-                                printError("You are already logged in, logout from your current session!");
-                            } else if(result == NetResponseType.Success) {
-                                LoginUserDTO loginDTO = responseMessage.readObject(LoginUserDTO::netDeserialize);
-                                loginDTO.user.setUsername(username);
-
-                                currentUser = loginDTO.user;
-                                clientState.setLogin(loginDTO.user);
-                                UserCallback stub = (UserCallback)
-                                        UnicastRemoteObject.exportObject(clientState, 0);
-                                regUserSrv.registerUserCallback(username, stub);
-                                printResponse("Welcome back %s, have fun here!", username);
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-                        }
-                    } catch (SocketDisconnectedException e) {
-                        e.printStackTrace();
-                    } catch (UserNotExistsException e) {
-                        printError("Unexpected response from server!");
-                    }
-                    break;
-                } // done
-                case "logout": {
-                    if(!checkParamsEqCount(commandSplitted, 0)) continue;
-                    if(checkServerConnection() || checkLogin()) break;
-
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.Logout, 0);
-
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.Logout) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.Success) {
-                                printResponse("See you later %s!", currentUser.getUsername());
-                            } else if(result == NetResponseType.UsernameNotExists) {
-                                printResponse("User %s was not found, probably deleted recently!", currentUser.getUsername());
-                            } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                printError("You are not logged in yet!");
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-
-                            clientState.logout();
-                            regUserSrv.unregisterUserCallback(currentUser.getUsername(), clientState);
-                            UnicastRemoteObject.unexportObject(clientState, true);
-                        }
-                    } catch (SocketDisconnectedException e) {
-                        e.printStackTrace();
-                    } catch (UserNotExistsException e) {
-                        printError("Unexpected response from server!");
-                    }
-                    break;
-                } // done
-                case "list": {
-                    if(!checkParamsEqCount(commandSplitted, 0, 2)) continue;
-
-                    switch(commandSplitted[1]) {
-                        case "users": {
-                            if(checkServerConnection() || checkLogin()) break;
-
-                            cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.ListUser, 0);
-                            try {
-                                NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                                if(responseMessage.getType() == NetMessageType.ListUser) {
-                                    NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                                    if(result == NetResponseType.Success) {
-                                        ListUsersDTO data = responseMessage.readObject(ListUsersDTO::netDeserialize);
-                                        Iterator<User> usersIterator = data.userList.iterator();
-                                        StringBuilder outputString = new StringBuilder(200);
-                                        outputString.append("  ----------- Suggested Users -----------\n");
-                                        int count = 0;
-                                        while (usersIterator.hasNext()) {
-                                            count++;
-                                            User user = usersIterator.next();
-                                            (currentUser.hasUserFollowed(user.getUsername()) ?
-                                                    outputString.append("  ") : outputString.append("? ")) // space between results
-                                                    .append(count).append(") ") // enumerate
-                                                    .append(user.getUsername()).append("  ") // username
-                                                    .append(WinsomeHelper.iteratorToString(user.getTagsIterator())); // tags
-                                            if(usersIterator.hasNext()) {
-                                                outputString.append('\n'); // new row
-                                            }
-                                        }
-
-                                        if(count == 0) {
-                                            outputString.append("         NONE          ");
-                                        }
-
-                                        printResponse(outputString.toString());
-                                    } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                        printError("You are not logged in yet!");
-                                    } else {
-                                        printError("Unexpected response from server!");
-                                    }
-                                }
-                            } catch (SocketDisconnectedException e) {
-                                e.printStackTrace();
-                            }
-
-                            break;
-                        }
-                        case "followers": {
-                            if(checkServerConnection() || checkLogin()) break;
-
-                            Iterator<String> followingIterator = currentUser.getFollowingIterator();
-                            StringBuilder outputString = new StringBuilder(100);
-                            outputString.append("  ----------- My Followers -----------\n");
-                            int count = 0;
-                            int elementsPerRow = 2;
-                            while (followingIterator.hasNext()) {
-                                count++;
-                                String follower = followingIterator.next();
-                                outputString.append("  ") // space between results
-                                        .append(count).append(") ").append(follower); // append actual result
-                                if(count % elementsPerRow == 0 && followingIterator.hasNext()) {
-                                    outputString.append('\n'); // new row
-                                }
-                            }
-
-                            if(count == 0) {
-                                outputString.append("         NONE          ");
-                            }
-
-                            printResponse(outputString.toString());
-                            break;
-                        }
-                        case "following": {
-                            if(checkServerConnection() || checkLogin()) break;
-
-                            Iterator<String> followingIterator = currentUser.getFollowedIterator();
-                            StringBuilder outputString = new StringBuilder(100);
-                            outputString.append("  ----------- My Followings -----------\n");
-                            int count = 0;
-                            int elementsPerRow = 2;
-                            while (followingIterator.hasNext()) {
-                                count++;
-                                String follower = followingIterator.next();
-                                outputString.append("  ") // space between results
-                                        .append(count).append(") ").append(follower); // append actual result
-                                if(count % elementsPerRow == 0 && followingIterator.hasNext()) {
-                                    outputString.append('\n'); // new row
-                                }
-                            }
-
-                            if(count == 0) {
-                                outputString.append("         NONE          ");
-                            }
-
-                            printResponse(outputString.toString());
-                            break;
-                        }
-                        default:
-                            printError(err_command_not_exists, "list " + commandSplitted[1]);
-                            continue;
-                    }
-                    break;
-                } // done
-                case "follow": {
-                    if(!checkParamsEqCount(commandSplitted, 1)) continue;
-                    if(checkServerConnection() || checkLogin()) break;
-                    String user = commandSplitted[1];
-
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.Follow,
-                            NetMessage.getStringSize(user))
-                            .writeString(user);
-
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.Follow) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.Success) {
-                                currentUser.addUserFollowed(user);
-                                printResponse("You followed %s!", user);
-                            } else if(result == NetResponseType.UsernameNotExists) {
-                                printResponse("User %s does not exist!", user);
-                            } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                printError("You are not logged in yet!");
-                            } else if(result == NetResponseType.UserSelfFollow) {
-                                printError("You can't follow yourself!");
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-                        }
-                    } catch (SocketDisconnectedException e) {
-                        e.printStackTrace();
-                    }
-                    break;
-                } // done
-                case "unfollowUser": {
-                    if(!checkParamsEqCount(commandSplitted, 1)) continue;
-                    if(checkServerConnection() || checkLogin()) break;
-                    String user = commandSplitted[1];
-
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.Unfollow,
-                            NetMessage.getStringSize(user))
-                            .writeString(user);
-
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.Unfollow) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.Success) {
-                                currentUser.removeUserFollowed(user);
-                                printResponse("You unfollowed %s!", user);
-                            } else if(result == NetResponseType.UsernameNotExists) {
-                                printResponse("User %s does not exist!", user);
-                            } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                printError("You are not logged in yet!");
-                            } else if(result == NetResponseType.UserSelfFollow) {
-                                printError("You can't follow yourself!");
-                            } else if(result == NetResponseType.UserNotFollowed) {
-                                printError("You don't follow %s!", user);
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-                        }
-                    } catch (SocketDisconnectedException e) {
-                        e.printStackTrace();
-                    }
-                    break;
-                } // done
-                case "viewBlog": {
-                    if(checkServerConnection() || checkLogin()) break;
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.ViewBlog, 4)
-                            .writeInt(0);
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.ViewBlog) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.Success) {
-                                ViewBlogDTO myBlog = responseMessage.readObject(ViewBlogDTO::netDeserialize);
-                                StringBuilder outputString = new StringBuilder(500);
-                                outputString.append("  ----------- My Blog -----------\n");
-                                for(int i = 0; i < myBlog.postCount; i++) {
-                                    Post currentPost = myBlog.getPost(i);
-                                    currentPost.setUsername(currentUser.getUsername());
-
-                                    outputString.append(i + 1).append(')')
-                                            .append(currentPost.isRewin() ? "  REWIN " : String.format("  %s ", currentPost.getTitle()))
-                                            .append(currentPost.getCreationDate().toString())
-                                            .append(" @").append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
-                                    if(!currentPost.isRewin()) {
-                                        outputString.append(currentPost.getContent()).append('\n');
-                                    } else {
-                                        Post rewin = currentPost.getOriginalPost();
-                                        outputString.append("-->").append(rewin.getTitle()).append("  ").append(rewin.getCreationDate().toString())
-                                                .append(" @").append(rewin.getUsername()).append("  [ID:").append(rewin.getId()).append(']').append('\n');
-                                        outputString.append("-->").append(rewin.getContent().replaceAll("\n", "\n-->")).append('\n');
-                                    }
-
-                                    outputString.append("Comments: ").append(currentPost.getCommentCount())
-                                            .append(" | ").append("UPS: ").append(currentPost.getTotalUpvotes()).append(" DOWNS: ")
-                                            .append(currentPost.getTotalDownvotes());
-
-                                    if(i < myBlog.postCount - 1) {
-                                        outputString.append("\n\n");
-                                    }
-                                }
-
-                                printResponse(outputString.toString());
-                            } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                printError("You are not logged in yet!");
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-                        }
-
-                    } catch(SocketDisconnectedException ex) {
-                        ex.printStackTrace();
-                    }
-                    break;
-                } // done
-                case "createPost": {
-                    if(!checkParamsEqCount(commandSplitted, 2)) continue;
-                    if(checkServerConnection() || checkLogin()) break;
-                    String title = commandSplitted[1];
-                    String content = commandSplitted[2];
-
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.CreatePost,
-                            NetMessage.getStringSize(title, content))
-                            .writeString(title)
-                            .writeString(content);
-
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.CreatePost) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.Success) {
-                                int postId = responseMessage.readInt();
-                                printResponse("Post created with id %d!", postId);
-                            } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                printError("You are not logged in yet!");
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-                        }
-
-                    } catch(SocketDisconnectedException ex) {
-                        ex.printStackTrace();
-                    }
-
-                    break;
-                } // done
-                case "show": {
-                    if(!checkParamsGeCount(commandSplitted, 0, 2)) continue;
-
-                    switch(commandSplitted[1]) {
-                        case "feed": {
-                            if(checkServerConnection() || checkLogin()) break;
-                            cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.ShowFeed, 4)
-                                    .writeInt(0);
-                            try {
-                                NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                                if(responseMessage.getType() == NetMessageType.ShowFeed) {
-                                    NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                                    if(result == NetResponseType.Success) {
-                                        ShowFeedDTO myFeed = responseMessage.readObject(ShowFeedDTO::netDeserialize);
-                                        StringBuilder outputString = new StringBuilder(500);
-                                        outputString.append("  ----------- My Feed -----------\n");
-                                        for(int i = 0; i < myFeed.postCount; i++) {
-                                            Post currentPost = myFeed.getPost(i);
-
-                                            outputString.append(i + 1).append(')')
-                                                    .append(currentPost.isRewin() ? "  REWIN " : String.format("  %s ", currentPost.getTitle()))
-                                                    .append(currentPost.getCreationDate().toString())
-                                                    .append(" @").append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
-                                            if(!currentPost.isRewin()) {
-                                                outputString.append(currentPost.getContent()).append('\n');
-                                            } else {
-                                                Post rewin = currentPost.getOriginalPost();
-                                                outputString.append("--> ").append(rewin.getTitle()).append("  ").append(rewin.getCreationDate().toString())
-                                                        .append(" @").append(rewin.getUsername()).append("  [ID:").append(rewin.getId()).append(']').append('\n');
-                                                outputString.append("-->").append(rewin.getContent().replaceAll("\n", "\n-->")).append('\n');
-                                            }
-
-                                            outputString.append("Comments: ").append(currentPost.getCommentCount())
-                                                    .append(" | ").append("UPS: ").append(currentPost.getTotalUpvotes()).append(" DOWNS: ")
-                                                        .append(currentPost.getTotalDownvotes());
-
-                                            if(i < myFeed.postCount - 1) {
-                                                outputString.append("\n\n");
-                                            }
-                                        }
-
-                                        printResponse(outputString.toString());
-                                    } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                        printError("You are not logged in yet!");
-                                    } else {
-                                        printError("Unexpected response from server!");
-                                    }
-                                }
-
-                            } catch(SocketDisconnectedException ex) {
-                                ex.printStackTrace();
-                            }
-                            break;
-                        }
-                        case "post": {
-                            if(!checkParamsEqCount(commandSplitted, 1, 2)) continue;
-                            if(checkServerConnection() || checkLogin()) break;
-
-                            int postId = Integer.parseInt(commandSplitted[2]);
-                            cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.ShowPost, 4)
-                                    .writeInt(postId);
-                            try {
-                                NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                                if(responseMessage.getType() == NetMessageType.ShowPost) {
-                                    NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                                    if(result == NetResponseType.Success) {
-                                        ShowPostDTO data = responseMessage.readObject(ShowPostDTO::netDeserialize);
-                                        Post currentPost = data.post;
-                                        if(currentPost == null) {
-                                            printError("Post with id %d does not exist!", postId);
-                                            break;
-                                        }
-                                        StringBuilder outputString = new StringBuilder(500);
-                                        outputString.append("  ").append(currentPost.getTitle()).append("  ").append(currentPost.getCreationDate().toString())
-                                                .append('@').append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
-                                        if(!currentPost.isRewin()) {
-                                            outputString.append(currentPost.getContent()).append('\n');
-                                        } else {
-                                            Post rewin = currentPost.getOriginalPost();
-                                            outputString.append("RW --> ").append(rewin.getTitle()).append("  ").append(rewin.getCreationDate().toString())
-                                                    .append(" @").append(rewin.getUsername()).append("  [ID:").append(rewin.getId()).append(']').append('\n');
-                                            outputString.append("   -->").append(rewin.getContent().replaceAll("\n", "\n   -->")).append('\n');
-                                        }
-
-                                        outputString.append("Comments: ").append(currentPost.getCommentCount())
-                                                .append(" | ").append("UPS: ").append(currentPost.getTotalUpvotes()).append(" DOWNS: ")
-                                                .append(currentPost.getTotalDownvotes());
-
-                                        printResponse(outputString.toString());
-                                    } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                        printError("You are not logged in yet!");
-                                    } else {
-                                        printError("Unexpected response from server!");
-                                    }
-                                }
-
-                            } catch(SocketDisconnectedException ex) {
-                                ex.printStackTrace();
-                            }
-                            break;
-                        }
-                        default:
-                            printError(err_command_not_exists, "show " + commandSplitted[1]);
-                            break;
-                    }
-                    break;
-                } // done
-                case "deletePost": {
-                    if(!checkParamsEqCount(commandSplitted, 1)) continue;
-                    if(checkServerConnection() || checkLogin()) continue;
-                    int postId = Integer.parseInt(commandSplitted[1]);
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.DeletePost, 4)
-                            .writeInt(postId);
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.DeletePost) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.Success) {
-                                printResponse("Post with id %d deleted successfully!", postId);
-                            } else if(result == NetResponseType.NotAuthorized) {
-                                printError("You are not authorized to delete this post!");
-                            } else if(result == NetResponseType.EntityNotExists) {
-                                printError("This post does not exists!");
-                            } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                printError("You are not logged in yet!");
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-                        }
-
-                    } catch(SocketDisconnectedException ex) {
-                        ex.printStackTrace();
-                    }
-                    break;
-                } // done
-                case "rewinPost": {
-                    if(!checkParamsEqCount(commandSplitted, 1)) continue;
-                    if(checkServerConnection() || checkLogin()) continue;
-
-                    int postId = Integer.parseInt(commandSplitted[1]);
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.RewinPost, 4)
-                            .writeInt(postId);
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.RewinPost) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.Success) {
-                                int rewinId = responseMessage.readInt();
-                                printResponse("Post rewinned with id %d!", rewinId);
-                            } else if(result == NetResponseType.NotAuthorized) {
-                                printError("You are not authorized to delete this post!");
-                            } else if(result == NetResponseType.EntityNotExists) {
-                                printError("This post does not exists!");
-                            } else if(result == NetResponseType.UserSelfRewin) {
-                                printError("You cannot rewin your own post!");
-                            } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                printError("You are not logged in yet!");
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-                        }
-
-                    } catch(SocketDisconnectedException ex) {
-                        ex.printStackTrace();
-                    }
-                    break;
-                } // done
-                case "ratePost": {
-                    if(!checkParamsEqCount(commandSplitted, 2)) continue;
-                    if(checkServerConnection() || checkLogin()) continue;
-                    int postId = Integer.parseInt(commandSplitted[1]);
-                    VoteType vote = VoteType.fromString(commandSplitted[2]);
-                    if(vote == null) {
-                        printError("Vote can be either \"+1\" or \"-1\"");
-                        break;
-                    }
-
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.RatePost, 12)
-                            .writeInt(postId)
-                            .writeInt(vote.getId())
-                            .writeInt(VotableType.Post.getId());
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.RatePost) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.Success) {
-                                printResponse("You gave a %s to this post!", vote.toString());
-                            } else if(result == NetResponseType.UserSelfVote) {
-                                printError("You cannot vote to your own post!");
-                            } else if(result == NetResponseType.UserAlreadyVoted) {
-                                printError("You already voted this post!");
-                            } else if(result == NetResponseType.PostNotInFeed) {
-                                printError("This post is not in you feed!");
-                            } else if(result == NetResponseType.EntityNotExists) {
-                                printError("This post does not exists!");
-                            } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                printError("You are not logged in yet!");
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-                        }
-
-                    } catch(SocketDisconnectedException ex) {
-                        ex.printStackTrace();
-                    }
-                    break;
-                } // done
-                case "addComment": {
-                    if(!checkParamsEqCount(commandSplitted, 2)) continue;
-                    if(checkServerConnection() || checkLogin()) continue;
-                    int postId = Integer.parseInt(commandSplitted[1]);
-                    String comment = commandSplitted[2];
-
-                    cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(cachedMessage, NetMessageType.CreateComment, 4 + NetMessage.getStringSize(comment))
-                            .writeInt(postId)
-                            .writeString(comment);
-                    try {
-                        NetMessage responseMessage = sendAndAwaitResponse(NetConnectionType.TCP);
-                        if(responseMessage.getType() == NetMessageType.CreateComment) {
-                            NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                            if(result == NetResponseType.Success) {
-                                int commentId = responseMessage.readInt();
-                                printResponse("Comment published with id %d!", commentId);
-                            } else if(result == NetResponseType.UserSelfComment) {
-                                printError("You cannot comment to your own post!");
-                            } else if(result == NetResponseType.PostNotInFeed) {
-                                printError("This post is not in you feed!");
-                            } else if(result == NetResponseType.EntityNotExists) {
-                                printError("This post does not exist!");
-                            } else if(result == NetResponseType.ClientNotLoggedIn) {
-                                printError("You are not logged in yet!");
-                            } else {
-                                printError("Unexpected response from server!");
-                            }
-                        }
-                    } catch(SocketDisconnectedException ex) {
-                        ex.printStackTrace();
-                    }
-                    break;
-                } // done
-                case "getWallet": {
-                    if(!checkParamsEqCount(commandSplitted, 0)) continue;
-
-                    if(checkServerConnection()) break;
-
-                    WinsomeHelper.printlnDebug("getWallet()");
-                    break;
-                }
-                case "getWalletInBitcoin": {
-                    if(!checkParamsEqCount(commandSplitted, 0)) continue;
-
-                    if(checkServerConnection()) break;
-
-                    WinsomeHelper.printlnDebug("< getWalletInBitcoin()");
-                    break;
-                }
-                case "quit":
-                    isClosing = true;
-                    break;
-                default:
-                    printError(err_command_not_exists, commandSplitted[0]);
-            }
-        }
-
-        if (command == null) {
-            return;
-        }
-
-        System.out.println("WINSOME closing...");
-    }
-
-    private static String readLine() {
         try {
-            System.out.print("> ");
-            return reader.readLine();
-        } catch (IOException ex) {
-            ex.printStackTrace();
-            return null;
-        }
-    }
-
-    private static boolean checkServerConnection() {
-        if(!clientConnector.isConnected()) {
-            printError("You are not connected to the server, try login before using other functionalities!");
-            return true;
+            app.initApplication();
+        } catch (RemoteException | NotBoundException e) {
+            e.printStackTrace();
+            return;
         }
 
-        return false;
-    }
+        while(true) {
+            if(app.consumeWalletNotification()) {
+                ClientApplication.printResponse("Wallet notification: your amount might be updated!");
+            }
+            String command = reader.readLine().trim();
+            if(command.equals("quit"))
+                break;
 
-    private static boolean checkLogin() {
-        if(!clientState.isLoggedIn()) {
-            printError("You are not logged in, try login before using other functionalities!");
-            return true;
-        }
+            String commandName = getCommand(command);
+            if(commandName.equals("Unknown")) {
+                ClientApplication.printError("This command does not exists!");
+                continue;
+            }
 
-        return false;
-    }
-
-    private static NetMessage sendAndAwaitResponse(NetConnectionType type) throws SocketDisconnectedException {
-        cachedMessage.sendMessage(clientConnector, type);
-        return NetMessage.fromConnector(clientConnector, type);
-    }
-
-    private static void printResponse(String format, Object... args) {
-        System.out.printf(String.format("< %s\n", format), args);
-    }
-
-    private static void printError(String format, Object... args) {
-        System.out.printf(String.format("! %s\n", format), args);
-    }
-
-    private static boolean checkParamsEqCount(String[] arr, int count, int functionNameRange) {
-        if(arr.length - functionNameRange == count) {
-            return true;
-        }
-
-        if(functionNameRange > arr.length) {
-            if(functionNameRange == 1)
-                printError(err_command_not_exists, arr[0]);
-            else
-                printError(err_command_not_exists, String.join(" ", Arrays.copyOfRange(arr, 0, arr.length)));
-
-            return false;
-        }
-
-        printResponse(err_command_args_count_eq, String.join(" ", Arrays.copyOfRange(arr, 0, functionNameRange)), count);
-        return false;
-    }
-
-    private static boolean checkParamsGeCount(String[] arr, int count, int functionNameRange) {
-        if(arr.length - functionNameRange >= count) {
-            return true;
-        }
-
-        if(functionNameRange > arr.length) {
-            if(functionNameRange == 1)
-                printError(err_command_not_exists, arr[0]);
-            else
-                printError(err_command_not_exists, String.join(" ", Arrays.copyOfRange(arr, 0, arr.length)));
-
-            return false;
-        }
-
-        printResponse(err_command_args_count_ge, String.join(" ", Arrays.copyOfRange(arr, 0, functionNameRange)), count);
-        return false;
-    }
-
-    private static boolean checkParamsEqCount(String[] arr, int count) {
-        return checkParamsEqCount(arr, count, 1);
-    }
-
-    private static boolean checkParamsGeCount(String[] arr, int count) {
-        return checkParamsGeCount(arr, count, 1);
-    }
-
-    private static void onQuit() {
-        System.out.println("Closing...");
-
-        if(clientConnector.isConnected()) {
+            String[] arguments;
             try {
-                clientConnector.disconnect();
-            } catch (IOException e) {
-                e.printStackTrace();
+                arguments = getCommandArgs(command, commandName);
+                app.sendCommand(commandName, arguments);
+            } catch(InvalidParameterException e) {
+                ClientApplication.printError(e.getMessage());
             }
         }
+
+        app.close();
+    }
+
+    /**
+     * Get the command arguments from a string and it's relative command
+     * @param line command arguments string
+     * @param cmd command related
+     * @return an array of tokenized arguments
+     * @throws InvalidParameterException if the command arguments does not meet the requirements
+     */
+    private static String[] getCommandArgs(String line, String cmd) throws InvalidParameterException {
+        String lineArg = excludeCommandName(line, cmd);
+        List<String> args = new ArrayList<>();
+        switch(cmd) {
+            case "logout":
+            case "list users":
+            case "list followers":
+            case "list following":
+                ensureNParameters(args, 0, lineArg, false, 0);
+                break;
+            case "register":
+                ensureNParameters(args, 3, lineArg, true, 7);
+                break;
+            case "follow":
+            case "unfollow":
+            case "show post":
+            case "delete":
+            case "rewin":
+                ensureNParameters(args, 1, lineArg, false, 0);
+                break;
+            case "wallet":
+            case "show feed":
+            case "blog":
+                ensureNParameters(args, 0, lineArg, true, 1);
+                break;
+            case "login":
+            case "post":
+            case "rate":
+            case "comment":
+                ensureNParameters(args, 2, lineArg, false, 0);
+                break;
+            case "help":
+                ensureNParameters(args, 0, lineArg, true, 10);
+                break;
+        }
+
+        return args.toArray(new String[0]);
+    }
+
+    /**
+     * Ensures that an argument string contains an expected amount of arguments and maybe a couple more
+     * then return the list of arguments
+     * @param args list of arguments in output
+     * @param expected expected number of arguments obligatory
+     * @param lineArgs argument string
+     * @param canExceed if the string can have optional arguments
+     * @param maxExceed max number of arguments including all type of parameters (maxExceed >= expected)
+     * @throws InvalidParameterException if a parameter is invalid
+     */
+    private static void ensureNParameters(List<String> args, int expected, String lineArgs, boolean canExceed, int maxExceed) throws InvalidParameterException {
+        Pair<String, String> step;
+        int i = 0;
+        while(i < expected || (canExceed && i < maxExceed)) {
+            if(lineArgs.equals("")) {
+                if(!canExceed)
+                    throw new InvalidParameterException("This command expect " + expected + " arguments but only " + i + " are provided!");
+                else if(i < expected)
+                    throw new InvalidParameterException("This command expect " + expected + " arguments but only " + i + " are provided!");
+                else
+                    break;
+            }
+
+            step = readStringParameter(lineArgs);
+            args.add(step.first);
+            lineArgs = step.second;
+            i++;
+        }
+
+        if(!canExceed && !lineArgs.equals("")) {
+            throw new InvalidParameterException("This command expect " + expected + " arguments but more are provided!");
+        }
+        if(canExceed && i >= maxExceed && !lineArgs.equals("")) {
+            throw new InvalidParameterException("This command maximum " + maxExceed + " arguments but more are provided!");
+        }
+     }
+
+    /**
+     * Read the first argument from a string
+     * @param lineArgs argument string
+     * @return a pair containing the tokenized argument and the modified argument string without the previous parameter
+     * @throws InvalidParameterException if the argument is invalid
+     */
+    private static Pair<String, String> readStringParameter(String lineArgs) throws InvalidParameterException {
+        if(lineArgs.charAt(0) == '"') {
+            int index = lineArgs.indexOf('"', 1);
+            if(index == -1)
+                throw new InvalidParameterException("A string parameter starting with \" does not terminate!");
+            String arg = lineArgs.substring(1, index);
+            return new Pair<>(arg, lineArgs.substring(index + 1).trim());
+        } else {
+            int index = lineArgs.indexOf(' ', 1);
+            if(index == -1)
+                index = lineArgs.length();
+            String arg = lineArgs.substring(0, index);
+            return new Pair<>(arg, index > lineArgs.length() - 1 ? "" : lineArgs.substring(index + 1).trim());
+        }
+    }
+
+    /**
+     * Remove the command name from the whole input command
+     * @param line input command
+     * @param cmd command name to remove
+     * @return command's arguments
+     */
+    private static String excludeCommandName(String line, String cmd) {
+        return line.substring(cmd.length()).trim();
+    }
+
+    /**
+     * Get the command name from an input string
+     * @param line input string
+     * @return the command name
+     */
+    private static String getCommand(String line) {
+        for(String key : ClientApplication.getCommandsAvailable()) {
+            if(startsWithCommand(line, key)) {
+                return key;
+            }
+        }
+
+        return "Unknown";
+    }
+
+    /**
+     * Check if a string starts with a command name
+     * @param str string
+     * @param cmd command name
+     * @return true if start with a command name
+     */
+    private static boolean startsWithCommand(String str, String cmd) {
+        return str.startsWith(cmd) && isNextCharacterEmpty(str, cmd);
+    }
+
+    /**
+     * Check if the next character after the match string is an empty space (if a next character exists)
+     * @param str whole string
+     * @param match initial match
+     * @return true if there is a space or if there is not a character afterwards
+     */
+    private static boolean isNextCharacterEmpty(String str, String match) {
+        int index = str.indexOf(match) + match.length();
+        if(index == str.length()) return true;
+        if(index < str.length())
+            return str.charAt(index) == ' ';
+
+        return false;
     }
 }

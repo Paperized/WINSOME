@@ -1,12 +1,13 @@
 package it.winsome.common.network;
 
 import it.winsome.common.exception.SocketDisconnectedException;
-import it.winsome.common.network.enums.NetConnectionType;
-import it.winsome.common.network.enums.NetClientConnector;
 import it.winsome.common.network.enums.NetMessageType;
 import it.winsome.common.WinsomeHelper;
 
 import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.ReadOnlyBufferException;
 import java.nio.channels.ReadableByteChannel;
@@ -16,6 +17,13 @@ import java.util.Collection;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 
+/**
+ * Wrapper around a ByteBuffer, it has a fixed length and can be read or written but never both together
+ * It has a way of reusing a previous net message by providing how much capacity is needed
+ * It offers a way to read or write easily a message in a TCP connection or anything which work with NIO Channels
+ * but not limited to those
+ * It offers also partial read/write in case of Non blocking IO
+ */
 public class NetMessage {
     public static final int NULL_IDENTIFIER = Integer.MAX_VALUE;
 
@@ -26,11 +34,19 @@ public class NetMessage {
     private ByteBuffer data;
     private int nextByteWritable = 0;
     private int nextByteReadable = 0;
+    private boolean isMessageTypeAvailable;
+    private boolean isUnused;
 
     private NetMessage() { }
 
+    /**
+     * Create a new writable message or reuse the previous one if the capacity is met
+     * @param message previous message
+     * @param type header type
+     * @param capacityNeeded capacity needed
+     * @return A new message
+     */
     public static NetMessage reuseWritableNetMessageOrCreate(NetMessage message, NetMessageType type, int capacityNeeded) {
-        capacityNeeded += 8;
         if(message == null) return writableNetMessage(type, capacityNeeded);
         if(message.getMaxCapacity() < capacityNeeded) {
             return writableNetMessage(type, capacityNeeded);
@@ -39,11 +55,19 @@ public class NetMessage {
         return reuseWritableNetMessage(message, type);
     }
 
+    /**
+     * Reuse an already used message by resetting it's state
+     * @param message message
+     * @param type header type
+     * @return the same message resettled
+     */
     public static NetMessage reuseWritableNetMessage(NetMessage message, NetMessageType type) {
         if(message == null) throw new NullPointerException("Message cannot be null!");
         message.type = type;
         message.messageLength = 8;
         message.hasChanged = true;
+        message.nextByteWritable = 0;
+        message.isMessageTypeAvailable = true;
 
         if(message.readOnly) {
             message.readOnly = false;
@@ -55,6 +79,12 @@ public class NetMessage {
         return message;
     }
 
+    /**
+     * Allocate a new writable message with a type and a capacity
+     * @param type header type
+     * @param maxCapacityMessage capacity needed
+     * @return A new message
+     */
     public static NetMessage writableNetMessage(NetMessageType type, int maxCapacityMessage) {
         NetMessage message = new NetMessage();
         maxCapacityMessage += 8;
@@ -62,11 +92,18 @@ public class NetMessage {
         message.type = type;
         message.data = ByteBuffer.allocate(maxCapacityMessage);
         message.hasChanged = true;
+        message.isMessageTypeAvailable = true;
         message.messageLength = 8;
         message.data.position(8);
         return message;
     }
 
+    /**
+     * Create a new readable message or reuse the previous one if the capacity is met
+     * @param message previous message
+     * @param capacityNeeded capacity needed
+     * @return A new message
+     */
     public static NetMessage reuseReadableNetMessageOrCreate(NetMessage message, int capacityNeeded) {
         capacityNeeded += 8;
         if(message == null) return readableNetMessage(ByteBuffer.allocate(capacityNeeded));
@@ -77,6 +114,11 @@ public class NetMessage {
         return reuseReadableNetMessage(message);
     }
 
+    /**
+     * Reuse an already used message by resetting it's state
+     * @param message message
+     * @return the same message resettled
+     */
     public static NetMessage reuseReadableNetMessage(NetMessage message) {
         if(message == null) throw new NullPointerException("Message cannot be null!");
         message.hasChanged = false;
@@ -84,21 +126,52 @@ public class NetMessage {
         message.messageLength = message.getMaxCapacity();
         message.readOnly = true;
         message.nextByteReadable = message.nextByteWritable = 0;
+        message.type = null;
+        message.isMessageTypeAvailable = false;
         return message;
     }
 
+    /**
+     * Allocate a new readable message backed by a ByteBuffer data
+     * @param data byte buffer
+     * @return A new message
+     */
     public static NetMessage readableNetMessage(ByteBuffer data) {
         NetMessage message = new NetMessage();
         if(data == null) throw new NullPointerException("Data cannot be null");
-        data.flip();
+        data.clear();
         message.messageLength = data.getInt();
         if(message.messageLength > data.capacity()) throw new IllegalArgumentException("Message length cant be bigger then the ByteBuffer capacity");
         message.type = NetMessageType.fromId(data.getInt());
         message.data = data;
+        message.isMessageTypeAvailable = true;
         message.readOnly = true;
         return message;
     }
 
+    /**
+     * Send a message to an udp address
+     * @param udpSocket socket sender
+     * @param address target address
+     * @param port target port
+     * @return true if the message was sent
+     */
+    public boolean sendMessage(DatagramSocket udpSocket, InetAddress address, int port) {
+        try {
+            ByteBuffer buf = getByteBuffer();
+            DatagramPacket dp = new DatagramPacket(buf.array(), messageLength, address, port);
+            udpSocket.send(dp);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Send a message to a writable channel
+     * @param channel writable channel
+     * @return true if the message was written fully
+     */
     public boolean sendMessage(WritableByteChannel channel) throws SocketDisconnectedException {
         if(messageLength < 8) throw new IllegalArgumentException("NetMessage must be minimum 8 bytes");
         if(channel == null) throw new NullPointerException("SocketChannel cannot be null!");
@@ -114,6 +187,11 @@ public class NetMessage {
             while((justSent = channel.write(messageBuffer)) > 0 && messageBuffer.hasRemaining())
                 nextByteWritable += justSent;
 
+            if(justSent == -1) {
+                throw new SocketDisconnectedException();
+            }
+            nextByteWritable += justSent;
+
             WinsomeHelper.printfDebug("Sent message size %d", nextByteWritable);
             return isWrittenFully();
         } catch(IOException ex) {
@@ -121,18 +199,14 @@ public class NetMessage {
         }
     }
 
-    public boolean sendMessage(NetClientConnector handler, NetConnectionType type) throws SocketDisconnectedException {
-        return sendMessage(handler.getWritableChannel(type));
-    }
-
-    public static NetMessage fromConnector(NetClientConnector handler, NetConnectionType type) throws SocketDisconnectedException {
-        return fromChannel(null, handler.getReadableChannel(type));
-    }
-
-    public static NetMessage fromConnector(NetMessage reuse, NetClientConnector handler, NetConnectionType type) throws SocketDisconnectedException {
-        return fromChannel(reuse, handler.getReadableChannel(type));
-    }
-
+    /**
+     * Read a message from a readable channel, an input message can be reused
+     * This message CAN be partial in case of Non Blocking IO, always check isReadFully()
+     * @param reuse reused message
+     * @param channel readable channel
+     * @return A new message
+     * @throws SocketDisconnectedException in case of socket disconnection
+     */
     public static NetMessage fromChannel(NetMessage reuse, ReadableByteChannel channel) throws SocketDisconnectedException {
         try {
             NetMessage newMessage = readHeaderMessage(reuse, channel);
@@ -144,13 +218,26 @@ public class NetMessage {
                 throw new SocketDisconnectedException();
             }
 
+            newMessage.nextByteReadable += lastRead;
+            if(newMessage.nextByteReadable >= 8) {
+                newMessage.isMessageTypeAvailable = true;
+            }
+
             WinsomeHelper.printfDebug("Received message size %d", newMessage.nextByteReadable);
             return newMessage;
-        } catch (IOException ex) {
+        } catch (Exception ex) {
             throw new SocketDisconnectedException();
         }
     }
 
+    /**
+     * Keep reading from a channel, used in case of the previous operation did not finish reading all the message
+     * Often used in Non Blocking IO
+     * @param netMessage partially read message
+     * @param channel readable channel
+     * @return true if the message is read fully
+     * @throws SocketDisconnectedException in case of socket disconnection
+     */
     public static boolean keepReadingFromChannel(NetMessage netMessage, ReadableByteChannel channel) throws SocketDisconnectedException {
         if(netMessage == null || channel == null) throw new NullPointerException("Parameters cannot be null!");
         if(!netMessage.didStartReading()) {
@@ -159,12 +246,18 @@ public class NetMessage {
 
         if(netMessage.isReadFully()) return true;
         try {
+            int startingIndex = netMessage.nextByteReadable;
             int lastRead;
             while((lastRead = channel.read(netMessage.data)) > 0 && netMessage.data.hasRemaining())
                 netMessage.nextByteReadable += lastRead;
 
             if(lastRead == -1) {
                 throw new SocketDisconnectedException();
+            }
+            netMessage.nextByteReadable += lastRead;
+
+            if(startingIndex < 7 && netMessage.nextByteReadable >= 8) {
+                netMessage.isMessageTypeAvailable = true;
             }
 
             WinsomeHelper.printfDebug("Received message size %d", netMessage.nextByteReadable);
@@ -174,6 +267,13 @@ public class NetMessage {
         }
     }
 
+    /**
+     * Read the first 4 bytes (obligatory) of the next message, it blocks (even in Non Blocking IO) until it's done
+     * @param reuse a reusable message
+     * @param channel readable channel
+     * @return A new message
+     * @throws SocketDisconnectedException in case of disconnection
+     */
     private static NetMessage readHeaderMessage(NetMessage reuse, ReadableByteChannel channel) throws SocketDisconnectedException {
         if(channel == null) throw new NullPointerException("Channel cannot be null!");
         ByteBuffer lengthBuffer = ByteBuffer.allocate(4);
@@ -186,7 +286,12 @@ public class NetMessage {
 
             int messageLength = lengthBuffer.getInt(0);
             NetMessage newMessage = NetMessage.reuseReadableNetMessageOrCreate(reuse, messageLength - 8);
+            newMessage.messageLength = messageLength;
+            newMessage.data.limit(newMessage.messageLength);
+            newMessage.data.position(0);
             newMessage.data.putInt(messageLength);
+            newMessage.isMessageTypeAvailable = false;
+            newMessage.type = null;
             newMessage.nextByteReadable = 4;
             return newMessage;
         } catch (IOException ex) {
@@ -201,6 +306,11 @@ public class NetMessage {
     public int readInt() {
         if(this.data.position() + 4 > messageLength) throw new IndexOutOfBoundsException();
         return this.data.getInt();
+    }
+
+    public double readDouble() {
+        if(this.data.position() + 8 > messageLength) throw new IndexOutOfBoundsException();
+        return this.data.getDouble();
     }
 
     public long readLong() {
@@ -238,6 +348,15 @@ public class NetMessage {
         if(readOnly) throw new ReadOnlyBufferException();
 
         this.data.putLong(value);
+        this.messageLength += 8;
+        if(!hasChanged) hasChanged = true;
+        return this;
+    }
+
+    public NetMessage writeDouble(double value) {
+        if(readOnly) throw new ReadOnlyBufferException();
+
+        this.data.putDouble(value);
         this.messageLength += 8;
         if(!hasChanged) hasChanged = true;
         return this;
@@ -327,6 +446,13 @@ public class NetMessage {
     }
 
     public NetMessageType getType() {
+        if(readOnly && isMessageTypeAvailable) {
+            if(type == null) {
+                type = NetMessageType.fromId(data.getInt(4));
+            }
+
+            return type;
+        }
         return type;
     }
 
@@ -347,24 +473,42 @@ public class NetMessage {
         }
 
         if(readOnly) {
+            // update type
+            getType();
             return data.asReadOnlyBuffer();
         }
 
         return data.duplicate();
     }
 
+    /**
+     * Check if the message started a write operation to a channel
+     * @return true if it has
+     */
     public boolean didStartWriting() {
         return nextByteWritable > 0;
     }
 
+    /**
+     * Check if the message started a read operation to a channel
+     * @return true if it has
+     */
     public boolean didStartReading() {
         return nextByteReadable > 0;
     }
 
+    /**
+     * Check if the message was written fully to a channel
+     * @return true if it has
+     */
     public boolean isWrittenFully() {
         return nextByteWritable == data.position();
     }
 
+    /**
+     * Check if the message was read fully from a channel
+     * @return true if it has
+     */
     public boolean isReadFully() {
         return nextByteReadable == data.position();
     }
@@ -375,14 +519,14 @@ public class NetMessage {
 
     public static int getStringSize(String str) {
         if(str == null) return 4;
-        return 4 + str.length();
+        return 4 + str.getBytes(StandardCharsets.UTF_8).length;
     }
 
     public static int getStringSize(String... strings) {
         int count = 4 * strings.length;
         for(String str : strings) {
             if(str != null) {
-                count += str.length();
+                count += str.getBytes(StandardCharsets.UTF_8).length;
             }
         }
         return count;
@@ -404,5 +548,26 @@ public class NetMessage {
             size += fnSize.apply(el);
         }
         return size;
+    }
+
+    public boolean isMessageTypeAvailable() {
+        return isMessageTypeAvailable;
+    }
+
+    /**
+     * Must be used before reading from a channel to fix the pointers of the ByteBuffer
+     * @return true if it has
+     */
+    public void prepareRead() {
+        data.flip();
+        data.position(8);
+    }
+
+    public boolean isUnused() {
+        return isUnused;
+    }
+
+    public void setUnused(boolean unused) {
+        isUnused = unused;
     }
 }

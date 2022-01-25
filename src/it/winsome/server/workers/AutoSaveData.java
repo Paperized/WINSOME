@@ -1,19 +1,19 @@
 package it.winsome.server.workers;
 
 import it.winsome.common.WinsomeHelper;
-import it.winsome.server.UserServiceImpl;
+import it.winsome.server.ServerLogic;
 
 public class AutoSaveData implements Runnable {
-    UserServiceImpl userService;
+    ServerLogic serverLogic;
 
-    public AutoSaveData(UserServiceImpl userService) {
-        this.userService = userService;
+    public AutoSaveData(ServerLogic serverLogic) {
+        this.serverLogic = serverLogic;
     }
 
     @Override
     public void run() {
         long start = System.currentTimeMillis();
-        userService.saveToDisk();
+        serverLogic.saveToDisk();
         long elapsed = System.currentTimeMillis() - start;
         WinsomeHelper.printfDebug("Autosave completed in %dms!", elapsed);
     }

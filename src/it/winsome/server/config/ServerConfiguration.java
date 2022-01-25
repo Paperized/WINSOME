@@ -16,6 +16,9 @@ public class ServerConfiguration {
     public int rmiServicePort = 6000;
     public String tcpAddress = "127.0.0.1";
     public int tcpPort = 5959;
+    public String multicastIp = "237.0.10.10";
+    public int multicastPort = 10909;
+    public double authorPercentage = 80D;
     public String dataFolder = "data/";
     public long autoSavePeriodSeconds = 20L;
     public long timeoutOnStopAutoSaveSeconds = 3L;
@@ -36,6 +39,9 @@ public class ServerConfiguration {
         timeoutOnStopAutoSaveSeconds = config.timeoutOnStopAutoSaveSeconds;
         keepAliveThreadPoolMinutes = config.keepAliveThreadPoolMinutes;
         timeoutTerminationThreadPoolMs = config.timeoutTerminationThreadPoolMs;
+        multicastIp = config.multicastIp;
+        multicastPort = config.multicastPort;
+        authorPercentage = config.authorPercentage;
     }
 
     public static boolean generateDefaultFile(String path) {

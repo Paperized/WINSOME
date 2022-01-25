@@ -16,14 +16,15 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class ServerMain {
-    private static UserServiceImpl registerService;
+    private static UserCallbackServerImpl registerService;
     private static Registry reg;
     private static ServerConnector tcpServer;
-    private static ScheduledExecutorService threadScheduler;
+    private static ScheduledExecutorService walletUpdater, autoSaveUpdater;
 
     private final static ServerConfiguration serverConfiguration = new ServerConfiguration();
     private static boolean configLoadingFailed = false;
     private static RecalculateWallet walletCalculator;
+    private static ServerLogic serverLogic;
 
     public static void main(String[] args) throws IOException {
         WinsomeHelper.setDebugMode(true);
@@ -46,10 +47,12 @@ public class ServerMain {
             return;
         }
 
+        serverLogic = new ServerLogic(serverConfiguration.dataFolder);
+
         LocateRegistry.createRegistry(serverConfiguration.rmiServicePort);
         reg = LocateRegistry.getRegistry(serverConfiguration.rmiServicePort);
 
-        registerService = new UserServiceImpl(serverConfiguration.dataFolder);
+        registerService = new UserCallbackServerImpl(serverLogic);
         reg.rebind(serverConfiguration.rmiServiceName, registerService);
         System.out.printf(
                 "Server pronto (nome servizio = %s, porta registry = %d)\n",
@@ -59,19 +62,20 @@ public class ServerMain {
                     serverConfiguration.timeoutTerminationThreadPoolMs);
         tcpServer.initServer(serverConfiguration.tcpAddress, serverConfiguration.tcpPort);
 
-        AutoSaveData dataSaver = new AutoSaveData(registerService);
-        walletCalculator = new RecalculateWallet("237.0.10.10", 10909, 80);
+        AutoSaveData dataSaver = new AutoSaveData(serverLogic);
+        walletCalculator = new RecalculateWallet(serverConfiguration.multicastIp,
+                serverConfiguration.multicastPort, serverConfiguration.authorPercentage);
 
-        threadScheduler = Executors.newScheduledThreadPool(2);
-        threadScheduler.scheduleAtFixedRate(walletCalculator, 10,10, TimeUnit.SECONDS);
-        threadScheduler.scheduleAtFixedRate(dataSaver, serverConfiguration.autoSavePeriodSeconds,
-                serverConfiguration.autoSavePeriodSeconds, TimeUnit.SECONDS);
-        getUserServiceImpl().test();
+        autoSaveUpdater = Executors.newScheduledThreadPool(1);
+        walletUpdater = Executors.newScheduledThreadPool(1);
+        walletUpdater.scheduleWithFixedDelay(walletCalculator, 0L,20L, TimeUnit.SECONDS);
+        autoSaveUpdater.scheduleWithFixedDelay(dataSaver, 1000L, 1000L, TimeUnit.SECONDS);
+        serverLogic.test();
         tcpServer.startServer();
     }
 
-    public static UserServiceImpl getUserServiceImpl() {
-        return registerService;
+    public static ServerLogic getServerLogic() {
+        return serverLogic;
     }
 
     private static void onQuit() {
@@ -80,11 +84,16 @@ public class ServerMain {
             if(configLoadingFailed)
                 return;
 
-            threadScheduler.shutdown();
-            if(!threadScheduler.awaitTermination(serverConfiguration.timeoutOnStopAutoSaveSeconds, TimeUnit.SECONDS)) {
-                threadScheduler.shutdownNow();
+            walletUpdater.shutdown();
+            autoSaveUpdater.shutdown();
+            if(!autoSaveUpdater.awaitTermination(serverConfiguration.timeoutOnStopAutoSaveSeconds, TimeUnit.SECONDS)) {
+                autoSaveUpdater.shutdownNow();
             }
-            registerService.saveToDisk();
+            if(!walletUpdater.awaitTermination(serverConfiguration.timeoutOnStopAutoSaveSeconds, TimeUnit.SECONDS)) {
+                walletUpdater.shutdownNow();
+            }
+
+            serverLogic.saveToDisk();
             walletCalculator.shutdownMulticast();
 
             reg.unbind(serverConfiguration.rmiServiceName);

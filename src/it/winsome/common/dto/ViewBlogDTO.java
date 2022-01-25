@@ -9,6 +9,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * View blog data transfer
+ */
 public class ViewBlogDTO {
     public int postCount;
     public List<Post> postList;
@@ -39,7 +42,7 @@ public class ViewBlogDTO {
         return NetMessage.getCollectionSize(blog.postList, ViewBlogDTO::netPostSize);
     }
 
-    public static void netPostSerialize(NetMessage to, Post post) {
+    private static void netPostSerialize(NetMessage to, Post post) {
         if(to.writeNullIfInvalid(post)) return;
 
         to.writeInt(post.getId());
@@ -63,7 +66,7 @@ public class ViewBlogDTO {
         WinsomeHelper.printlnDebug(post.toString());
     }
 
-    public static Post netPostDeserialize(NetMessage from) {
+    private static Post netPostDeserialize(NetMessage from) {
         if(from.isPeekingNull()) return null;
 
         Post post = new Post(from.readInt());
@@ -86,7 +89,7 @@ public class ViewBlogDTO {
         return post;
     }
 
-    public static int netPostSize(Post post) {
+    private static int netPostSize(Post post) {
         if(post == null) return 4;
 
         return 24 // id 4, time 8, upvotes 4, downvote 4, comments 4

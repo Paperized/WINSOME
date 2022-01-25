@@ -4,6 +4,8 @@ import it.winsome.common.dto.*;
 import it.winsome.common.entity.Comment;
 import it.winsome.common.entity.Post;
 import it.winsome.common.entity.User;
+import it.winsome.common.entity.Wallet;
+import it.winsome.common.entity.enums.CurrencyType;
 import it.winsome.common.entity.enums.VotableType;
 import it.winsome.common.entity.enums.VoteType;
 import it.winsome.common.exception.NoAuthorizationException;
@@ -12,16 +14,15 @@ import it.winsome.common.network.NetMessage;
 import it.winsome.common.network.enums.NetMessageType;
 import it.winsome.common.network.enums.NetResponseType;
 import it.winsome.common.WinsomeHelper;
+import it.winsome.server.ServerLogic;
 import it.winsome.server.session.ConnectionSession;
 import it.winsome.server.ServerConnector;
 import it.winsome.server.ServerMain;
-import it.winsome.server.UserServiceImpl;
 
 import java.io.IOException;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.WritableByteChannel;
-import java.rmi.RemoteException;
 import java.util.*;
 import java.util.function.Function;
 
@@ -29,7 +30,7 @@ import static it.winsome.common.network.enums.NetMessageType.*;
 
 public class ReaderRequestHandler implements Runnable {
     private final static Map<NetMessageType, Function<ReaderRequestHandler, Boolean>> mapDispatcher;
-    private static UserServiceImpl userService;
+    private static ServerLogic userService;
     private final ServerConnector server;
     private final ConnectionSession session;
     private final WritableByteChannel writableByteChannel;
@@ -39,7 +40,7 @@ public class ReaderRequestHandler implements Runnable {
 
     public ReaderRequestHandler(ServerConnector server, SelectionKey key) {
         if(userService == null)
-            userService = ServerMain.getUserServiceImpl();
+            userService = ServerMain.getServerLogic();
 
         this.server = server;
         this.key = key;
@@ -60,9 +61,11 @@ public class ReaderRequestHandler implements Runnable {
         NetMessage incomingMessage;
         try {
             incomingMessage = session.getReadableMessage();
-            if(!incomingMessage.didStartReading()) {
+            if(incomingMessage == null || incomingMessage.isUnused()
+                    || !incomingMessage.didStartReading()) {
                 incomingMessage = NetMessage.fromChannel(incomingMessage, readableByteChannel);
                 session.setReadableMessage(incomingMessage);
+                incomingMessage.setUnused(false);
             } else {
                 NetMessage.keepReadingFromChannel(incomingMessage, readableByteChannel);
             }
@@ -79,6 +82,7 @@ public class ReaderRequestHandler implements Runnable {
             return;
         }
 
+        incomingMessage.prepareRead();
         Function<ReaderRequestHandler, Boolean> fn = mapDispatcher.getOrDefault(incomingMessage.getType(),
                                                                         ReaderRequestHandler::handleUnknown);
         if(!fn.apply(this)) {
@@ -87,6 +91,7 @@ public class ReaderRequestHandler implements Runnable {
             return;
         }
 
+        incomingMessage.setUnused(true);
         if(didFinishWrite)
             this.key.interestOps(SelectionKey.OP_READ);
         else
@@ -109,6 +114,7 @@ public class ReaderRequestHandler implements Runnable {
             put(RatePost, ReaderRequestHandler::handleRateEntity);
             put(RateComment, ReaderRequestHandler::handleRateEntity);
             put(CreateComment, ReaderRequestHandler::handleCreateComment);
+            put(Wallet, ReaderRequestHandler::handleGetWallet);
             put(Logout, ReaderRequestHandler::handleLogout);
         }});
     }
@@ -140,7 +146,8 @@ public class ReaderRequestHandler implements Runnable {
                 response.writeInt(result.getId());
                 WinsomeHelper.printfDebug("Incoming login with %s but a session already exist!", username, password);
             } else {
-                LoginUserDTO dto = new LoginUserDTO((User) readerRequestHandler.key.attachment());
+                LoginUserDTO dto = new LoginUserDTO(
+                        ((ConnectionSession) readerRequestHandler.key.attachment()).getUserLogged());
                 response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(),
                         4 + LoginUserDTO.netSize(dto));
 
@@ -164,28 +171,15 @@ public class ReaderRequestHandler implements Runnable {
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printfDebug("Incoming follow to %s but client isn't logged in!", toFollow);
         } else {
-            String username = user.getUsername();
-            if(username.equalsIgnoreCase(toFollow)) {
-                response.writeInt(NetResponseType.UserSelfFollow.getId());
-                WinsomeHelper.printfDebug("Incoming follow from %s to itself!", username);
-            } else {
-                User followedUser = userService.getUserByUsername(toFollow);
-                if(followedUser == null) {
-                    response.writeInt(NetResponseType.UsernameNotExists.getId());
-                    WinsomeHelper.printfDebug("Incoming follow to %s but it doesn't exist!", toFollow);
-                } else {
-                    user.addUserFollowed(toFollow);
-                    if(followedUser.addUserFollowing(username)) {
-                        try {
-                            userService.notifyFollowAdded(username, toFollow);
-                        } catch (RemoteException e) {
-                            e.printStackTrace();
-                        }
-                    }
+            NetResponseType res = userService.addFollow(user.getUsername(), toFollow);
+            response.writeInt(res.getId());
 
-                    response.writeInt(NetResponseType.Success.getId());
-                    WinsomeHelper.printfDebug("Incoming follow from %s to %s!", username, toFollow);
-                }
+            if(res == NetResponseType.UserSelfFollow) {
+                WinsomeHelper.printfDebug("Incoming follow from %s to itself!", user.getUsername());
+            } else if(res == NetResponseType.UsernameNotExists) {
+                WinsomeHelper.printfDebug("Incoming follow to %s but it doesn't exist!", toFollow);
+            } else {
+                WinsomeHelper.printfDebug("Incoming follow from %s to %s!", user.getUsername(), toFollow);
             }
         }
 
@@ -203,33 +197,17 @@ public class ReaderRequestHandler implements Runnable {
             response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
             WinsomeHelper.printfDebug("Incoming unfollow to %s but client isn't logged in!", toFollow);
         } else {
-            String username = user.getUsername();
-            if(username.equalsIgnoreCase(toFollow)) {
-                response.writeInt(NetResponseType.UserSelfFollow.getId());
-                WinsomeHelper.printfDebug("Incoming unfollow from %s to itself!", username);
-            } else {
-                User followedUser = userService.getUserByUsername(toFollow);
-                if(followedUser == null) {
-                    response.writeInt(NetResponseType.UsernameNotExists.getId());
-                    WinsomeHelper.printfDebug("Incoming unfollow from %s to %s but it doesn't exist!", username, toFollow);
-                } else {
-                    if(!user.removeUserFollowed(toFollow)) {
-                        response.writeInt(NetResponseType.UserNotFollowed.getId());
-                        WinsomeHelper.printfDebug("Incoming unfollow from %s to %s but it is not being followed!", username, toFollow);
-                    }
-                    else {
-                        if(followedUser.removeUserFollowing(username)) {
-                            try {
-                                userService.notifyFollowRemoved(username, toFollow);
-                            } catch (RemoteException e) {
-                                e.printStackTrace();
-                            }
-                        }
+            NetResponseType res = userService.removeFollow(user.getUsername(), toFollow);
+            response.writeInt(res.getId());
 
-                        response.writeInt(NetResponseType.Success.getId());
-                        WinsomeHelper.printfDebug("Incoming unfollow from %s to %s!", username, toFollow);
-                    }
-                }
+            if(res == NetResponseType.UserSelfFollow) {
+                WinsomeHelper.printfDebug("Incoming unfollow from %s to itself!", user.getUsername());
+            } else if(res == NetResponseType.UsernameNotExists) {
+                WinsomeHelper.printfDebug("Incoming unfollow from %s to %s but it doesn't exist!", user.getUsername(), toFollow);
+            } else if(res == NetResponseType.UserNotFollowed) {
+                WinsomeHelper.printfDebug("Incoming unfollow from %s to %s but it is not being followed!", user.getUsername(), toFollow);
+            } else {
+                WinsomeHelper.printfDebug("Incoming unfollow from %s to %s!", user.getUsername(), toFollow);
             }
         }
 
@@ -501,6 +479,42 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    public static boolean handleGetWallet(ReaderRequestHandler readerRequestHandler) {
+        NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
+        NetMessage response = readerRequestHandler.session.getWritableMessage();
+        CurrencyType currencyType = CurrencyType.fromId(incomingRequest.readInt());
+        if(currencyType == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
+            response.writeInt(NetResponseType.InvalidParameters.getId());
+            return sendMessage(readerRequestHandler, response);
+        }
+
+        User user;
+        if((user = readerRequestHandler.hasAuthorizedUser()) == null) {
+            response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
+            response.writeInt(NetResponseType.ClientNotLoggedIn.getId());
+            WinsomeHelper.printfDebug("Incoming wallet but client isn't logged in!");
+        } else {
+            try {
+                Wallet wallet = userService.getWallet(user.getUsername(), currencyType);
+                GetWalletDTO dto = new GetWalletDTO(wallet);
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(),
+                        4 + GetWalletDTO.netSize(dto));
+                response.writeInt(NetResponseType.Success.getId());
+                response.writeObject(dto, GetWalletDTO::netSerialize);
+                WinsomeHelper.printfDebug("Incoming wallet %s from %s but internal error occurred!",
+                        currencyType.toString(), user.getUsername());
+            } catch (IOException e) {
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
+                response.writeInt(NetResponseType.InternalError.getId());
+                WinsomeHelper.printfDebug("Incoming wallet %s from %s but internal error occurred!",
+                        currencyType.toString(), user.getUsername());
+            }
+        }
+
+        return sendMessage(readerRequestHandler, response);
+    }
+
     public static boolean handleLogout(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         NetMessage response = readerRequestHandler.session.getWritableMessage();
@@ -537,13 +551,12 @@ public class ReaderRequestHandler implements Runnable {
             return null;
         }
 
-        User checkedUser = userService.getUserByUsername(loggedUser.getUsername());
-        if(checkedUser == null) {
-            key.attach(null);
+        if(!userService.doUserExists(loggedUser.getUsername())) {
+            ((ConnectionSession) key.attachment()).setUserLogged(null);
             return null;
         }
 
-        return checkedUser;
+        return loggedUser;
     }
 
     private void onClientDisconnected() {

@@ -9,6 +9,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 
+/**
+ * Show post data transfer
+ */
 public class ShowPostDTO {
     public Post post;
 
@@ -25,7 +28,11 @@ public class ShowPostDTO {
         return dto;
     }
 
-    public static void netPostSerialize(NetMessage to, Post post) {
+    public static int netSize(ShowPostDTO showPost) {
+        return netPostSize(showPost.post);
+    }
+
+    private static void netPostSerialize(NetMessage to, Post post) {
         if(to.writeNullIfInvalid(post)) return;
 
         to.writeInt(post.getId());
@@ -48,7 +55,7 @@ public class ShowPostDTO {
         to.writeCollection(post.getComments(), ShowPostDTO::netCommentSerialize);
     }
 
-    public static Post netPostDeserialize(NetMessage from) {
+    private static Post netPostDeserialize(NetMessage from) {
         if(from.isPeekingNull()) return null;
 
         Post post = new Post(from.readInt());
@@ -73,7 +80,7 @@ public class ShowPostDTO {
         return post;
     }
 
-    public static void netCommentSerialize(NetMessage to, Comment comment) {
+    private static void netCommentSerialize(NetMessage to, Comment comment) {
         if(to.writeNullIfInvalid(comment)) return;
 
         to.writeInt(comment.getId());
@@ -84,7 +91,7 @@ public class ShowPostDTO {
         to.writeInt(comment.getTotalDownvotes());
     }
 
-    public static Comment netCommentDeserialize(NetMessage from) {
+    private static Comment netCommentDeserialize(NetMessage from) {
         if(from.isPeekingNull()) return null;
 
         Comment comment = new Comment(from.readInt(), from.readString(), from.readString());
@@ -94,13 +101,13 @@ public class ShowPostDTO {
         return comment;
     }
 
-    public static int netCommentSize(Comment comment) {
+    private static int netCommentSize(Comment comment) {
         if(comment == null) return 4;
 
         return 20 + NetMessage.getStringSize(comment.getOwner(), comment.getContent());
     }
 
-    public static int netPostSize(Post post) {
+    private static int netPostSize(Post post) {
         if(post == null) return 4;
 
         return 20 // id 4, time 8, upvote 4, downvote 4
@@ -110,9 +117,5 @@ public class ShowPostDTO {
                                                                 post.getOriginalPost().getContent()) :
                                     NetMessage.getStringSize(post.getTitle(), post.getContent()))
                 + NetMessage.getCollectionSize(post.getComments(), ShowPostDTO::netCommentSize);
-    }
-
-    public static int netSize(ShowPostDTO showPost) {
-        return netPostSize(showPost.post);
     }
 }

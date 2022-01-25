@@ -4,10 +4,13 @@ import it.winsome.common.entity.abstracts.BaseSocialEntity;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Iterator;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class WinsomeHelper {
     private static boolean debugMode = false;
@@ -62,6 +65,45 @@ public class WinsomeHelper {
         for(Lock lock : locks) {
             lock.unlock();
         }
+    }
+
+    public static void prepareReadCollection(Collection<? extends SynchronizedObject> col) {
+        for (SynchronizedObject x : col) {
+            x.prepareRead();
+        }
+    }
+
+    public static void releaseReadCollection(Collection<? extends SynchronizedObject> col) {
+        for (SynchronizedObject x : col) {
+            x.releaseRead();
+        }
+    }
+
+    public static <T extends BaseSocialEntity> List<T> deepCopySynchronizedList(Stream<T> stream) {
+        return stream.map(x -> {
+            x.prepareRead();
+            T copied = x.deepCopyAs();
+            x.releaseRead();
+            return copied;
+        }).collect(Collectors.toList());
+    }
+
+    public static <T extends BaseSocialEntity> Set<T> deepCopySynchronizedSet(Stream<T> stream) {
+        return stream.map(x -> {
+            x.prepareRead();
+            T copied = x.deepCopyAs();
+            x.releaseRead();
+            return copied;
+        }).collect(Collectors.toSet());
+    }
+
+    public static <T extends BaseSocialEntity, K, V> Map<K, V> deepCopySynchronizedMap(Stream<T> stream, Function<T, K> keyMap, Function<T, V> keyValue) {
+        return stream.map(x -> {
+            x.prepareRead();
+            T copied = x.deepCopyAs();
+            x.releaseRead();
+            return copied;
+        }).collect(Collectors.toMap(keyMap, keyValue));
     }
 
     public static String normalizeUsername(String username) {

@@ -1,13 +1,19 @@
 package it.winsome.common.entity.abstracts;
 
-import it.winsome.common.entity.Post;
+import it.winsome.common.SynchronizedObject;
+import it.winsome.common.exception.SynchronizedInitException;
 
 import java.io.Serializable;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Objects;
 
-public abstract class BaseSocialEntity implements Serializable, Cloneable {
+/**
+ * Base class for every entity which require an id to exist
+ * This class is synchronizable since it extends SynchonizedObject but can also be used without
+ * it by disabling the option.
+ */
+public abstract class BaseSocialEntity extends SynchronizedObject implements Serializable {
     private int id;
     private Timestamp creationDate;
 
@@ -21,18 +27,22 @@ public abstract class BaseSocialEntity implements Serializable, Cloneable {
     }
 
     public int getId() {
+        checkReadSynchronization();
         return id;
     }
 
     public void setId(int id) {
+        checkWriteSynchronization();
         this.id = id;
     }
 
     public Timestamp getCreationDate() {
+        checkReadSynchronization();
         return creationDate;
     }
 
     public void setCreationDate(Timestamp creationDate) {
+        checkWriteSynchronization();
         this.creationDate = creationDate;
     }
 
@@ -49,14 +59,15 @@ public abstract class BaseSocialEntity implements Serializable, Cloneable {
         return Objects.hash(id);
     }
 
-    @Override
-    public Object clone() throws CloneNotSupportedException {
-        return super.clone();
-    }
-
+    /**
+     * Create a deep copy of this entity
+     * @param <T> conversion
+     * @return an identical entity of this one
+     */
     public <T extends BaseSocialEntity> T deepCopyAs() {
+        checkReadSynchronization();
         try {
-            Object cloned = super.clone();
+            BaseSocialEntity cloned = (BaseSocialEntity) cloneAndResetSynchronizer();
             return (T) cloned;
         } catch (CloneNotSupportedException | ClassCastException e) {
             e.printStackTrace();

@@ -1,5 +1,8 @@
 package it.winsome.common.entity.enums;
 
+/**
+ * Vote Type which can be positive or negative
+ */
 public enum VoteType {
     UP(0),
     DOWN(1);

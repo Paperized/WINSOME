@@ -6,6 +6,9 @@ import it.winsome.common.network.NetMessage;
 import java.util.HashSet;
 import java.util.Set;
 
+/**
+ * Login data transfer
+ */
 public class LoginUserDTO {
     public User user;
 
@@ -28,7 +31,7 @@ public class LoginUserDTO {
         return netUserSize(list.user);
     }
 
-    public static void netUserSerialize(NetMessage to, User user) {
+    private static void netUserSerialize(NetMessage to, User user) {
         if(to.writeNullIfInvalid(user)) return;
 
         to.writeCollection(user.getTags())
@@ -36,7 +39,7 @@ public class LoginUserDTO {
                 .writeCollection(user.getFollowed());
     }
 
-    public static User netUserDeserialize(NetMessage from) {
+    private static User netUserDeserialize(NetMessage from) {
         if(from.isPeekingNull()) return null;
 
         Set<String> tags = new HashSet<>();
@@ -48,7 +51,7 @@ public class LoginUserDTO {
         return new User("", "", tags, following, followed);
     }
 
-    public static int netUserSize(User user) {
+    private static int netUserSize(User user) {
         if(user == null) return 4;
         return NetMessage.getCollectionSize(user.getTags()) +
                 NetMessage.getCollectionSize(user.getFollowing()) +

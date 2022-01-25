@@ -1,5 +1,8 @@
 package it.winsome.common.entity.enums;
 
+/**
+ * Votable Types of entities
+ */
 public enum VotableType {
     Comment(0),
     Post(1);

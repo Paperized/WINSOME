@@ -1,13 +1,16 @@
 package it.winsome.client;
 
 import it.winsome.common.entity.User;
-import it.winsome.common.service.interfaces.UserCallback;
+import it.winsome.common.service.interfaces.UserCallbackClient;
 import it.winsome.common.WinsomeHelper;
 
 import java.rmi.RemoteException;
 import java.rmi.server.RemoteObject;
 
-public class ClientSocialState extends RemoteObject implements UserCallback {
+/**
+ * Class that receives asynchronous callbacks from the server's RMI
+ */
+public class ClientSocialState extends RemoteObject implements UserCallbackClient {
     private User currentUser;
     private boolean loggedIn;
 
@@ -15,11 +18,18 @@ public class ClientSocialState extends RemoteObject implements UserCallback {
         super();
     }
 
+    /**
+     * Set this user as logged
+     * @param currentUser the user
+     */
     public void setLogin(User currentUser) {
         this.currentUser = currentUser;
         loggedIn = true;
     }
 
+    /**
+     * Logout from the current user
+     */
     public void logout() {
         loggedIn = false;
     }

@@ -9,6 +9,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * List User data transfer
+ */
 public class ListUsersDTO {
     public final List<User> userList;
 
@@ -31,14 +34,14 @@ public class ListUsersDTO {
         return NetMessage.getCollectionSize(list.userList, ListUsersDTO::netUserSize);
     }
 
-    public static void netUserSerialize(NetMessage to, User user) {
+    private static void netUserSerialize(NetMessage to, User user) {
         if(to.writeNullIfInvalid(user)) return;
 
         to.writeString(user.getUsername())
                 .writeCollection(user.getTags());
     }
 
-    public static User netUserDeserialize(NetMessage from) {
+    private static User netUserDeserialize(NetMessage from) {
         if(from.isPeekingNull()) return null;
 
         String username = from.readString();
@@ -47,7 +50,7 @@ public class ListUsersDTO {
         return new User(username, "", tags);
     }
 
-    public static int netUserSize(User user) {
+    private static int netUserSize(User user) {
         if(user == null) return 4;
         return NetMessage.getStringSize(user.getUsername()) + NetMessage.getCollectionSize(user.getTags());
     }

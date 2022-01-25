@@ -1,13 +1,21 @@
 package it.winsome.common.entity;
 
 import com.google.gson.annotations.JsonAdapter;
+import it.winsome.common.SynchronizedObject;
+import it.winsome.common.WinsomeHelper;
 import it.winsome.common.entity.abstracts.BaseSocialEntity;
 import it.winsome.common.entity.abstracts.BaseVotableEntity;
 import it.winsome.common.json.PostIdJsonAdapter;
 
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
+/**
+ * This represents a post inside the social network, it includes a list of comments and eventually
+ * a "rewinned" post.
+ * This entity can be synchronizable since it extends SynchronizedObject
+ */
 public class Post extends BaseVotableEntity {
     private String username;
     private String title;
@@ -41,115 +49,112 @@ public class Post extends BaseVotableEntity {
     }
 
     public boolean addComment(Comment comment) {
+        checkWriteSynchronization();
         if(comment == null) return false;
-        Comment added = comments.putIfAbsent(comment, comment);
-        if(added != null && !added.equals(comment)) {
-            totalComments++;
-            return true;
-        }
+        if(comments.containsKey(comment))
+            return false;
 
-        return false;
+        comments.put(comment, comment);
+        totalComments++;
+        return true;
     }
 
-    public Comment hasComment(Comment comment) {
-        return comments.get(comment);
-    }
-
-    public Set<Comment> getComments() { return Collections.unmodifiableSet(comments.keySet()); }
-
-    public Comment removeComment(Comment comment) {
-        Comment removed = comments.remove(comment);
-        if(removed != null)
-            totalComments--;
-        return removed;
+    public Set<Comment> getComments() {
+        checkReadSynchronization();
+        return Collections.unmodifiableSet(comments.keySet());
     }
 
     public void setComments(Collection<Comment> comments) {
+        checkWriteSynchronization();
         if(comments == null) throw new NullPointerException();
         // map each of them in the map
         this.comments = comments.stream().collect(Collectors.toMap(x -> x, x -> x));
         totalComments = comments.size();
     }
 
-    public int getCommentCount() { return comments.size(); }
+    public int getCommentCount() {
+        checkReadSynchronization();
+        return comments.size();
+    }
 
     public String getUsername() {
+        checkReadSynchronization();
         return username;
     }
 
     public void setUsername(String username) {
+        checkWriteSynchronization();
         this.username = username;
     }
 
     public String getTitle() {
+        checkReadSynchronization();
         return title;
     }
 
     public void setTitle(String title) {
+        checkWriteSynchronization();
         this.title = title;
     }
 
     public String getContent() {
+        checkReadSynchronization();
         return content;
     }
 
     public void setContent(String content) {
+        checkWriteSynchronization();
         this.content = content;
     }
 
     public boolean isRewin() {
+        checkReadSynchronization();
         return originalPost != null;
     }
 
     public Post getOriginalPost() {
+        checkReadSynchronization();
         return originalPost;
     }
 
     public int getTotalComments() {
+        checkReadSynchronization();
         return totalComments;
     }
 
     public void setTotalComments(int totalComments) {
+        checkWriteSynchronization();
         this.totalComments = totalComments;
     }
 
     public void setOriginalPost(Post originalPost) {
-        boolean originalFound = false;
+        if(originalPost == null) return;
+        checkWriteSynchronization();
         Post currentPost = originalPost;
-        while(currentPost != null) {
-            if(currentPost.originalPost == null) {
-                originalFound = true;
-                break;
-            }
-
+        while (currentPost.originalPost != null) {
             currentPost = currentPost.originalPost;
         }
 
-        if(!originalFound)
-            throw new IllegalArgumentException("No original post found during the walkthrough!");
         this.originalPost = originalPost;
-    }
-
-    @Override
-    public Object clone() throws CloneNotSupportedException {
-        Post post = (Post) super.clone();
-        post.comments = new HashMap<>(comments);
-        post.originalPost = (Post) originalPost.clone();
-        return post;
     }
 
     @Override
     public <T extends BaseSocialEntity> T deepCopyAs() {
         Post post = super.deepCopyAs();
-        post.comments = comments.values().stream().map(Comment::<Comment>deepCopyAs)
-                .collect(Collectors.toMap(x->x, y->y));
-        if(originalPost != null)
+        post.comments = WinsomeHelper.deepCopySynchronizedMap(comments.values().stream(), x->x, y->y);
+
+        if(originalPost != null) {
+            originalPost.prepareRead();
             post.originalPost = originalPost.deepCopyAs();
+            originalPost.releaseRead();
+        }
+
         return (T) post;
     }
 
     @Override
     public String toString() {
+        checkReadSynchronization();
         return "Post{" +
                 "id='" + getId() + '\'' +
                 ", username='" + username + '\'' +
@@ -161,10 +166,25 @@ public class Post extends BaseVotableEntity {
     }
 
     public int getCurrentIteration() {
+        checkReadSynchronization();
         return currentIteration;
     }
 
     public void setCurrentIteration(int currentIteration) {
+        checkWriteSynchronization();
         this.currentIteration = currentIteration;
+    }
+
+    @Override
+    public <T extends SynchronizedObject> T enableSynchronization(boolean recursive) {
+        super.enableSynchronization(recursive);
+        if(recursive) {
+            if(originalPost != null)
+                originalPost.enableSynchronization(true);
+
+            comments.forEach((k, v) -> v.enableSynchronization(true));
+            votesMap.forEach((k, v) -> v.enableSynchronization(true));
+        }
+        return (T) this;
     }
 }

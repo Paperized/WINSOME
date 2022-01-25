@@ -1,12 +1,19 @@
 package it.winsome.common.entity.abstracts;
 
+import it.winsome.common.SynchronizedObject;
 import it.winsome.common.entity.Vote;
 import it.winsome.common.entity.enums.VoteType;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
+/**
+ * Base class for votable entities, it extends from BaseSocialEntity then it is also
+ * synchronizable.
+ * This class offers a way to vote (like/dislike) an existing entity
+ */
 public abstract class BaseVotableEntity extends BaseSocialEntity {
-    private Map<String, Vote> votesMap;
+    protected Map<String, Vote> votesMap;
     private int totalUpvotes;
     private int totalDownvotes;
 
@@ -19,51 +26,53 @@ public abstract class BaseVotableEntity extends BaseSocialEntity {
         votesMap = new HashMap<>(0);
     }
 
-    public boolean addVote(String username, VoteType type) {
-        if(votesMap.containsKey(username)) {
+    public boolean addVote(Vote vote) {
+        checkWriteSynchronization();
+        if(votesMap.containsKey(vote.getFrom())) {
             return false;
         }
 
-        votesMap.put(username, new Vote(username, type));
+        votesMap.put(vote.getFrom(), vote);
         return true;
     }
 
     public Vote getVote(String username) {
+        checkReadSynchronization();
         return votesMap.get(username);
-    }
-
-    public boolean removeVote(String username) {
-        Vote removed = votesMap.remove(username);
-        if(removed != null) {
-            totalUpvotes += (removed.getType() == VoteType.UP ? -1 : 1);
-            return true;
-        }
-
-        return false;
     }
 
     public Collection<Vote> getVotes() { return Collections.unmodifiableCollection(votesMap.values()); }
 
     public int getTotalUpvotes() {
+        checkReadSynchronization();
         return totalUpvotes;
     }
 
     public void setTotalUpvotes(int totalUpvotes) {
+        checkWriteSynchronization();
         this.totalUpvotes = totalUpvotes;
     }
 
     public int getTotalDownvotes() {
+        checkReadSynchronization();
         return totalDownvotes;
     }
 
     public void setTotalDownvotes(int totalDownvotes) {
+        checkWriteSynchronization();
         this.totalDownvotes = totalDownvotes;
     }
 
     @Override
     public <T extends BaseSocialEntity> T deepCopyAs() {
         BaseVotableEntity base = super.deepCopyAs();
-        base.votesMap = new HashMap<>(votesMap);
+        base.votesMap = votesMap.values().stream().map(x -> {
+            x.prepareRead();
+            Vote dc = new Vote(x.getFrom(), x.getType());
+            dc.setNeedIteration(x.isNeedIteration());
+            x.releaseRead();
+            return dc;
+        }).collect(Collectors.toMap(Vote::getFrom, y->y));
         return (T) base;
     }
 }

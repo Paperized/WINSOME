@@ -7,6 +7,9 @@ import it.winsome.common.entity.Post;
 
 import java.io.IOException;
 
+/**
+ * Serialize and Deserialize a Post with its id
+ */
 public class PostIdJsonAdapter extends TypeAdapter<Post> {
     @Override
     public void write(JsonWriter out, Post value) throws IOException {

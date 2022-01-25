@@ -1,5 +1,8 @@
 package it.winsome.common.network.enums;
 
+/**
+ * Every type of message header type
+ */
 public enum NetMessageType {
     None(0),
     Login(1),
@@ -16,7 +19,8 @@ public enum NetMessageType {
     RateComment(12),
     CreateComment(13),
     ViewBlog(14),
-    NotifyWallet(15);
+    NotifyWallet(15),
+    Wallet(16);
 
     private final int id;
     NetMessageType(int id) {
