@@ -70,7 +70,6 @@ public class ServerMain {
         walletUpdater.scheduleWithFixedDelay(walletCalculator, 0L,20L, TimeUnit.SECONDS);
         autoSaveUpdater.scheduleWithFixedDelay(dataSaver, serverConfiguration.autoSavePeriodSeconds,
                 serverConfiguration.autoSavePeriodSeconds, TimeUnit.SECONDS);
-        serverLogic.test();
         tcpServer.startServer();
     }
 

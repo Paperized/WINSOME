@@ -262,64 +262,6 @@ public class ServerLogic {
         return allCompleted;
     }
 
-    public void test() {
-        if(registeredUsers.size() > 0) return;
-        String psw = WinsomeHelper.generateFromSHA256("download99");
-        registeredUsers.put("ghfjy787", new User("ghfjy787", psw, new String[] { "pesca", "programmazione", "film", "LoL", "youtube", "anime", "manga" }));
-        cachedBlogs.put("ghfjy787", new LinkedList<>());
-        registeredUsers.put("pippo99", new User("pippo99", psw, new String[] { "LoL", "agricoltura", "vino", "manga" }));
-        cachedBlogs.put("pippo99", new LinkedList<>());
-        registeredUsers.put("gianmarco", new User("gianmarco", psw, new String[] { "Film", "programmazione", "LoL", "youtube" }));
-        cachedBlogs.put("gianmarco", new LinkedList<>());
-        registeredUsers.put("piero", new User("piero", psw, new String[] { "crypto", "youtube", "film" }));
-        cachedBlogs.put("piero", new LinkedList<>());
-        registeredUsers.put("clacla", new User("clacla", psw, new String[] { "anime", "manga", "un cazzo" }));
-        cachedBlogs.put("clacla", new LinkedList<>());
-
-        registeredUsers.get("piero").addUserFollowed("ghfjy787");
-        registeredUsers.get("piero").addUserFollowed("gianmarco");
-
-        Post p = new Post(-1, "gianmarco", "Youtube è meglio delle crypto!", "YOUTUBE REGNA POGGGGGGGGG XD");
-        addPost(p);
-        addVote(p.getId(), VotableType.Post, VoteType.UP, "piero");
-        Comment c = new Comment(-1, "piero", "Bel post niente da dire");
-        c.setPostId(p.getId());
-        c.addVote(new Vote("ghfjy787", VoteType.UP));
-        addComment(c, registeredUsers.get("piero"));
-        c = new Comment(-1, "ghfjy787", "Non saprei meh..");
-        c.setPostId(p.getId());
-        c.addVote(new Vote("piero", VoteType.UP));
-        addComment(c, registeredUsers.get("ghfjy787"));
-        c = new Comment(-1, "piero", "Bel post niente da dire");
-        c.addVote(new Vote("ghfjy787", VoteType.UP));
-        addComment(c, registeredUsers.get("piero"));
-        Post rewin = new Post(-1, "piero", "GIANMARCO MA COSA DICI PORCODDIOOOOO!", "VA IN MONA CO YOUTUBE!");
-        rewin.setOriginalPost(new Post(p.getId()));
-        addPost(rewin);
-        addPost(new Post(-1, "piero", "Ecco perchè le monete virtuali sono OP AF!", "Allora praticamente I BTC sono la vostra salvezza\n, dovete comprarne all'infinito e basta.. XD"));
-        p = new Post(-1, "piero", "BITCOIN SU FORTNITE!!!", "Pazzesco io boh, sicuramente comprero il panino di Trevis COTT!");
-        addPost(p);
-        c = new Comment(-1, "piero", "Bel post niente da dire");
-        c.setPostId(p.getId());
-        c.addVote(new Vote("ghfjy787", VoteType.UP));
-        addComment(c, registeredUsers.get("piero"));
-        c = new Comment(-1, "piero", "Bel post niente da dire");
-        c.addVote(new Vote("ghfjy787", VoteType.UP));
-        addComment(c, registeredUsers.get("piero"));
-        c = new Comment(-1, "piero", "Bel post niente da dire");
-        c.addVote(new Vote("ghfjy787", VoteType.UP));
-        addComment(c, registeredUsers.get("piero"));
-        addPost(new Post(-1, "ghfjy787", "IDRATARSI BENE", "HO SETEEEEEE"));
-        rewin = new Post(-1, "ghfjy787", "Pierino ancora una volta dice cagate!", null);
-        rewin.setOriginalPost(new Post(p.getId()));
-        addPost(rewin);
-        addPost(new Post(-1, "pippo99", "A me mi piacciono le api grandi!", "sisi miele si!"));
-        addPost(new Post(-1, "clacla", "Ecco perchè mi piaccono le anime TDDY!", "BEH LO SAPETE ANCHE VOI!"));
-
-        WinsomeHelper.printfDebug("Max id post: %d", maxPostId.get());
-        saveToDisk();
-    }
-
     /**
      * Create a new user
      * @param username username
