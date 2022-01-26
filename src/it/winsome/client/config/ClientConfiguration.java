@@ -19,8 +19,6 @@ public class ClientConfiguration {
     public int rmiServicePort = 6000;
     public String serverTcpAddress = "127.0.0.1";
     public int serverTcpPort = 5959;
-    public String multicastIp = "237.0.10.10";
-    public int multicastPort = 10909;
 
     /**Load a configuration from a path
      * @param path path of the json file
@@ -34,8 +32,6 @@ public class ClientConfiguration {
         rmiServicePort = config.rmiServicePort;
         serverTcpAddress = config.serverTcpAddress;
         serverTcpPort = config.serverTcpPort;
-        multicastIp = config.multicastIp;
-        multicastPort = config.multicastPort;
     }
 
 

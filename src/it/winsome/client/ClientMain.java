@@ -37,6 +37,8 @@ public class ClientMain {
             if(app.consumeWalletNotification()) {
                 ClientApplication.printResponse("Wallet notification: your amount might be updated!");
             }
+
+            System.out.print("> ");
             String command = reader.readLine().trim();
             if(command.equals("quit"))
                 break;

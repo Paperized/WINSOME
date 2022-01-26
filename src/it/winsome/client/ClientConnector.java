@@ -13,31 +13,23 @@ import java.nio.channels.SocketChannel;
  * notifications
  */
 public class ClientConnector {
-    MulticastChecker multicastChecker;
-    SocketChannel socketChannel;
-    InetSocketAddress serverAddress;
-    InetAddress multicastAddress;
-    int multicastPort;
+    private MulticastChecker multicastChecker;
+    private SocketChannel socketChannel;
+    private final InetSocketAddress serverAddress;
+    private InetAddress multicastAddress;
+    private int multicastPort;
 
     WalletNotification walletNotifier;
 
-    public ClientConnector(String tcpIp, int port, String multicastIp, int multicastPort) throws UnknownHostException {
+    public ClientConnector(String tcpIp, int port) {
         serverAddress = new InetSocketAddress(tcpIp, port);
-        this.multicastAddress = InetAddress.getByName(multicastIp);
-        this.multicastPort = multicastPort;
     }
 
     /**
-     * Start the connection TCP and Multicast to the server
+     * Start the connection TCP
      * @return true if connected
      */
-    public boolean startConnector() {
-        try {
-            multicastChecker = new MulticastChecker(walletNotifier, multicastAddress, multicastPort);
-        } catch (IOException e) {
-            return false;
-        }
-
+    public boolean startTCP() {
         if(socketChannel == null || !socketChannel.isConnected()) {
             try {
                 socketChannel = SocketChannel.open();
@@ -48,8 +40,26 @@ public class ClientConnector {
             }
         }
 
-        multicastChecker.start();
         return true;
+    }
+
+    /**
+     * start the multicast channel
+     * @param multicastIp multicast ip
+     * @param multicastPort local port
+     * @return true if started
+     */
+    public boolean startMulticast(String multicastIp, int multicastPort, WalletNotification notification) {
+        try {
+            multicastAddress = InetAddress.getByName(multicastIp);
+            this.multicastPort = multicastPort;
+            walletNotifier = notification;
+            multicastChecker = new MulticastChecker(walletNotifier, multicastAddress, multicastPort);
+            multicastChecker.start();
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /**
@@ -71,14 +81,6 @@ public class ClientConnector {
         if(multicastChecker != null) {
             multicastChecker.interrupt();
         }
-    }
-
-    /**
-     * Provide a callback to be updated
-     * @param walletNotifier interface callback
-     */
-    public void setWalletNotifier(WalletNotification walletNotifier) {
-        this.walletNotifier = walletNotifier;
     }
 
     /**

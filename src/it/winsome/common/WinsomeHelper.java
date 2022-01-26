@@ -5,7 +5,6 @@ import it.winsome.common.entity.abstracts.BaseSocialEntity;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.function.Function;
@@ -43,7 +42,7 @@ public class WinsomeHelper {
 
     /**
      * PrintLn a string if in debug mode
-     * @param str
+     * @param str string to print
      */
     public static void printlnDebug(String str) {
         if(debugMode) {
@@ -159,10 +158,6 @@ public class WinsomeHelper {
      * @return output username
      */
     public static String normalizeUsername(String username) {
-        if(username.startsWith(" ") || username.endsWith(" ")) {
-            return username.trim().toLowerCase();
-        }
-
         return username.trim().toLowerCase();
     }
 
@@ -172,11 +167,7 @@ public class WinsomeHelper {
      * @return output tag
      */
     public static String normalizeTag(String tag) {
-        if(tag.startsWith(" ") || tag.endsWith(" ")) {
-            return tag.trim().toLowerCase();
-        }
-
-        return tag.toLowerCase();
+        return tag.trim().toLowerCase();
     }
 
     /**
@@ -185,16 +176,16 @@ public class WinsomeHelper {
      *	@return una stringa esadecimale leggibile
      */
     public static String generateFromSHA256(String s) {
-        byte[] hash = null;
+        byte[] hash;
         try {
             hash = sha256(s);
         } catch (NoSuchAlgorithmException e) {
             return null;
         }
 
-        StringBuffer hexString = new StringBuffer();
-        for (int i = 0; i < hash.length; i++) {
-            String hex = Integer.toHexString(0xff & hash[i]);
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : hash) {
+            String hex = Integer.toHexString(0xff & b);
             if (hex.length() == 1) hexString.append('0');
             hexString.append(hex);
         }

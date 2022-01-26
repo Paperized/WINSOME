@@ -33,7 +33,7 @@ public class ServerConnector {
      * Initialize the server by opening a Selector, a ServerSocket channel and Initializing the ThreadPool
      * @param ip this server ip
      * @param port this server port
-     * @throws IOException
+     * @throws IOException exception
      */
     public void initServer(String ip, int port) throws IOException {
         address = new InetSocketAddress(ip, port);
@@ -49,7 +49,7 @@ public class ServerConnector {
 
     /**
      * Stops the server and wait a certain time for the ThreadPool to finish the requests
-     * @throws IOException
+     * @throws IOException exception
      */
     public void stopServer() throws IOException {
         requestHandler.shutdown();
@@ -70,7 +70,7 @@ public class ServerConnector {
 
     /**
      * Main Loop of the server
-     * @throws IOException
+     * @throws IOException exception
      */
     public void startServer() throws IOException {
         System.out.println("Server TCP started with port " + address.getPort() + "!");
@@ -104,7 +104,7 @@ public class ServerConnector {
     /**
      * Accept the client socket, configure it as non blocking and attach a ConnectionSession
      * @param key input key
-     * @throws IOException
+     * @throws IOException exception
      */
     private void handleAccept(SelectionKey key) throws IOException {
         ServerSocketChannel server = (ServerSocketChannel) key.channel();

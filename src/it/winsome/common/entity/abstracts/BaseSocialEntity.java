@@ -1,7 +1,6 @@
 package it.winsome.common.entity.abstracts;
 
 import it.winsome.common.SynchronizedObject;
-import it.winsome.common.exception.SynchronizedInitException;
 
 import java.io.Serializable;
 import java.sql.Timestamp;

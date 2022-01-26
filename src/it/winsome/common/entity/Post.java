@@ -1,14 +1,15 @@
 package it.winsome.common.entity;
 
+import com.google.gson.annotations.Expose;
 import com.google.gson.annotations.JsonAdapter;
 import it.winsome.common.SynchronizedObject;
 import it.winsome.common.WinsomeHelper;
 import it.winsome.common.entity.abstracts.BaseSocialEntity;
 import it.winsome.common.entity.abstracts.BaseVotableEntity;
+import it.winsome.common.json.PostCommentMapJsonAdapter;
 import it.winsome.common.json.PostIdJsonAdapter;
 
 import java.util.*;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -23,7 +24,9 @@ public class Post extends BaseVotableEntity {
 
     @JsonAdapter(PostIdJsonAdapter.class)
     private Post originalPost;
+    @JsonAdapter(PostCommentMapJsonAdapter.class)
     private Map<Comment, Comment> comments;
+    @Expose(deserialize = false)
     private int totalComments;
     int currentIteration = 0;
 

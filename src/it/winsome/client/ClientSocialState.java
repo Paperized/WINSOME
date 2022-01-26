@@ -48,10 +48,6 @@ public class ClientSocialState extends RemoteObject implements UserCallbackClien
         WinsomeHelper.printfDebug("> %s unfollowed you!", follower);
     }
 
-    public User getCurrentUser() {
-        return currentUser;
-    }
-
     public boolean isLoggedIn() {
         return loggedIn;
     }

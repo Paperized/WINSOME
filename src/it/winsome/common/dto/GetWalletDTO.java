@@ -1,17 +1,13 @@
 package it.winsome.common.dto;
 
 import it.winsome.common.entity.Transaction;
-import it.winsome.common.entity.User;
 import it.winsome.common.entity.Wallet;
-import it.winsome.common.entity.enums.CurrencyType;
 import it.winsome.common.network.NetMessage;
 
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
-import java.util.Set;
 
 /**
  * Wallet command data transfer

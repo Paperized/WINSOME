@@ -16,7 +16,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class ServerMain {
-    private static UserCallbackServerImpl registerService;
     private static Registry reg;
     private static ServerConnector tcpServer;
     private static ScheduledExecutorService walletUpdater, autoSaveUpdater;
@@ -52,7 +51,7 @@ public class ServerMain {
         LocateRegistry.createRegistry(serverConfiguration.rmiServicePort);
         reg = LocateRegistry.getRegistry(serverConfiguration.rmiServicePort);
 
-        registerService = new UserCallbackServerImpl(serverLogic);
+        UserCallbackServerImpl registerService = new UserCallbackServerImpl(serverLogic);
         reg.rebind(serverConfiguration.rmiServiceName, registerService);
         System.out.printf(
                 "Server pronto (nome servizio = %s, porta registry = %d)\n",
@@ -69,7 +68,8 @@ public class ServerMain {
         autoSaveUpdater = Executors.newScheduledThreadPool(1);
         walletUpdater = Executors.newScheduledThreadPool(1);
         walletUpdater.scheduleWithFixedDelay(walletCalculator, 0L,20L, TimeUnit.SECONDS);
-        autoSaveUpdater.scheduleWithFixedDelay(dataSaver, 1000L, 1000L, TimeUnit.SECONDS);
+        autoSaveUpdater.scheduleWithFixedDelay(dataSaver, serverConfiguration.autoSavePeriodSeconds,
+                serverConfiguration.autoSavePeriodSeconds, TimeUnit.SECONDS);
         serverLogic.test();
         tcpServer.startServer();
     }
@@ -81,6 +81,7 @@ public class ServerMain {
     public static ServerLogic getServerLogic() {
         return serverLogic;
     }
+    public static ServerConfiguration getServerConfiguration() { return serverConfiguration; }
 
     /**
      * Clean the connections and additional thread working

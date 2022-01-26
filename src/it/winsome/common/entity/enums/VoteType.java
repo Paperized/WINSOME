@@ -7,7 +7,7 @@ public enum VoteType {
     UP(0),
     DOWN(1);
 
-    private int id;
+    private final int id;
     VoteType(int id) {
         this.id = id;
     }

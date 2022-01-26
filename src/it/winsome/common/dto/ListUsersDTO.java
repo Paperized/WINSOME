@@ -1,6 +1,5 @@
 package it.winsome.common.dto;
 
-import it.winsome.common.entity.Post;
 import it.winsome.common.entity.User;
 import it.winsome.common.network.NetMessage;
 

@@ -10,13 +10,13 @@ public interface UserCallbackClient extends Remote {
     /**
      * Called everytime a follow is received
      * @param follower follow received
-     * @throws RemoteException
+     * @throws RemoteException remote exception
      */
     void onFollowReceived(String follower) throws RemoteException;
     /**
      * Called everytime a follow is removed
      * @param follower follow removed
-     * @throws RemoteException
+     * @throws RemoteException remote exception
      */
     void onFollowRemoved(String follower) throws RemoteException;
 }

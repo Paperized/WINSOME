@@ -64,7 +64,6 @@ public class ShowFeedDTO {
                 .writeInt(post.getTotalUpvotes())
                 .writeInt(post.getTotalDownvotes());
 
-        WinsomeHelper.printlnDebug(post.toString());
     }
 
     private static Post netPostDeserialize(NetMessage from) {
@@ -88,7 +87,6 @@ public class ShowFeedDTO {
         post.setTotalUpvotes(from.readInt());
         post.setTotalDownvotes(from.readInt());
 
-        WinsomeHelper.printlnDebug(post.toString());
         return post;
     }
 

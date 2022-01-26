@@ -7,7 +7,7 @@ public enum VotableType {
     Comment(0),
     Post(1);
 
-    private int id;
+    private final int id;
     VotableType(int id) {
         this.id = id;
     }

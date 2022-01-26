@@ -24,7 +24,7 @@ public enum NetResponseType {
     UserAlreadyLoggedIn(17),
     InternalError(18);
 
-    private int id;
+    private final int id;
     NetResponseType(int id) {
         this.id = id;
     }

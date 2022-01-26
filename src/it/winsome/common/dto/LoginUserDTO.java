@@ -11,24 +11,32 @@ import java.util.Set;
  */
 public class LoginUserDTO {
     public User user;
+    public String multicastIp;
+    public int  multicastPort;
 
     public LoginUserDTO() {  }
-    public LoginUserDTO(User user) {
+    public LoginUserDTO(User user, String multicastIp, int multicastPort) {
         this.user = user;
+        this.multicastIp = multicastIp;
+        this.multicastPort = multicastPort;
     }
 
     public static void netSerialize(NetMessage to, LoginUserDTO dto) {
         to.writeObject(dto.user, LoginUserDTO::netUserSerialize);
+        to.writeString(dto.multicastIp);
+        to.writeInt(dto.multicastPort);
     }
 
     public static LoginUserDTO netDeserialize(NetMessage from) {
         LoginUserDTO list = new LoginUserDTO();
         list.user = from.readObject(LoginUserDTO::netUserDeserialize);
+        list.multicastIp = from.readString();
+        list.multicastPort = from.readInt();
         return list;
     }
 
     public static int netSize(LoginUserDTO list) {
-        return netUserSize(list.user);
+        return netUserSize(list.user) + NetMessage.getStringSize(list.multicastIp) + 4;
     }
 
     private static void netUserSerialize(NetMessage to, User user) {

@@ -115,7 +115,7 @@ public class ShowPostDTO {
                 + (post.isRewin() ? 12 + NetMessage.getStringSize(post.getOriginalPost().getUsername(),
                                                                 post.getOriginalPost().getTitle(),
                                                                 post.getOriginalPost().getContent()) :
-                                    NetMessage.getStringSize(post.getTitle(), post.getContent()))
+                                    4 + NetMessage.getStringSize(post.getTitle(), post.getContent()))
                 + NetMessage.getCollectionSize(post.getComments(), ShowPostDTO::netCommentSize);
     }
 }

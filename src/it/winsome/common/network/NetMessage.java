@@ -1,5 +1,6 @@
 package it.winsome.common.network;
 
+import it.winsome.common.exception.InvalidParameterException;
 import it.winsome.common.exception.SocketDisconnectedException;
 import it.winsome.common.network.enums.NetMessageType;
 import it.winsome.common.WinsomeHelper;
@@ -15,6 +16,7 @@ import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -23,6 +25,8 @@ import java.util.function.Function;
  * It offers a way to read or write easily a message in a TCP connection or anything which work with NIO Channels
  * but not limited to those
  * It offers also partial read/write in case of Non blocking IO
+ *
+ * Provides validated input
  */
 public class NetMessage {
     public static final int NULL_IDENTIFIER = Integer.MAX_VALUE;
@@ -192,7 +196,6 @@ public class NetMessage {
             }
             nextByteWritable += justSent;
 
-            WinsomeHelper.printfDebug("Sent message size %d", nextByteWritable);
             return isWrittenFully();
         } catch(IOException ex) {
             throw new SocketDisconnectedException();
@@ -223,7 +226,6 @@ public class NetMessage {
                 newMessage.isMessageTypeAvailable = true;
             }
 
-            WinsomeHelper.printfDebug("Received message size %d", newMessage.nextByteReadable);
             return newMessage;
         } catch (Exception ex) {
             throw new SocketDisconnectedException();
@@ -260,7 +262,6 @@ public class NetMessage {
                 netMessage.isMessageTypeAvailable = true;
             }
 
-            WinsomeHelper.printfDebug("Received message size %d", netMessage.nextByteReadable);
             return netMessage.isReadFully();
         } catch (IOException e) {
             throw new SocketDisconnectedException();
@@ -301,6 +302,81 @@ public class NetMessage {
 
     public boolean isPeekingNull() {
         return this.data.getInt(this.data.position()) == NULL_IDENTIFIER;
+    }
+
+    /**
+     * Read an integer from the message and throw an exception if the validation fails
+     * @param validation validation function
+     * @return the validated integer
+     * @throws InvalidParameterException if invalid
+     */
+    public int readInt(Consumer<Integer> validation) throws InvalidParameterException {
+        int value = readInt();
+        validation.accept(value);
+        return value;
+    }
+
+    /**
+     * Read an double from the message and throw an exception if the validation fails
+     * @param validation validation function
+     * @return the validated double
+     * @throws InvalidParameterException if invalid
+     */
+    public double readDouble(Consumer<Double> validation) throws InvalidParameterException {
+        double value = readDouble();
+        validation.accept(value);
+        return value;
+    }
+
+    /**
+     * Read an long from the message and throw an exception if the validation fails
+     * @param validation validation function
+     * @return the validated long
+     * @throws InvalidParameterException if invalid
+     */
+    public long readLong(Consumer<Long> validation) throws InvalidParameterException {
+        long value = readLong();
+        validation.accept(value);
+        return value;
+    }
+
+    /**
+     * Read an string from the message and throw an exception if the validation fails
+     * @param validation validation function
+     * @return the validated string
+     * @throws InvalidParameterException if invalid
+     */
+    public String readString(Consumer<String> validation) throws InvalidParameterException {
+        String value = readString();
+        validation.accept(value);
+        return value;
+    }
+
+    /**
+     * Read an object from the message and throw an exception if the validation fails
+     * @param fn the function used to create the object
+     * @param validation validation function
+     * @return the validated object
+     * @throws InvalidParameterException if invalid
+     */
+    public <T> T readObject(Function<NetMessage, T> fn, Consumer<T> validation)
+            throws InvalidParameterException {
+        T obj = readObject(fn);
+        validation.accept(obj);
+        return obj;
+    }
+
+    public void readCollectionStringValidation(Collection<String> col, Consumer<Collection<String>> validation)
+            throws InvalidParameterException {
+        readCollection(col);
+        validation.accept(col);
+    }
+
+    public <T> void readCollection(Collection<T> col, Function<NetMessage, T> deserialization,
+                                   Consumer<Collection<T>> validation)
+            throws InvalidParameterException {
+        readCollection(col, deserialization);
+        validation.accept(col);
     }
 
     public int readInt() {
@@ -556,7 +632,6 @@ public class NetMessage {
 
     /**
      * Must be used before reading from a channel to fix the pointers of the ByteBuffer
-     * @return true if it has
      */
     public void prepareRead() {
         data.flip();

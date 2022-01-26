@@ -79,7 +79,7 @@ public abstract class SynchronizedObject implements Cloneable {
 
     /**
      * Downgrade the caller from having a write lock to a read lock
-     * @return
+     * @return if it was downgraded
      */
     public boolean downgradeToRead() {
         if(!synchronizationEnabled || !isThreadWriting()) return false;
@@ -107,7 +107,7 @@ public abstract class SynchronizedObject implements Cloneable {
 
     /**
      * Check if this thread has a read lock
-     * @return
+     * @return if the current thread is reading
      */
     public boolean isThreadReading() {
         return readHolders.contains(Thread.currentThread());
@@ -115,7 +115,7 @@ public abstract class SynchronizedObject implements Cloneable {
 
     /**
      * Check if this thread has a write lock
-     * @return
+     * @return true if the current thread is writing
      */
     public boolean isThreadWriting() {
         return rwLock.isWriteLockedByCurrentThread();
@@ -144,7 +144,7 @@ public abstract class SynchronizedObject implements Cloneable {
 
     /**
      * Check if the synchronization is enabled
-     * @return
+     * @return if this object is synchronized
      */
     public boolean isSynchronizationEnabled() {
         return synchronizationEnabled;
@@ -153,7 +153,7 @@ public abstract class SynchronizedObject implements Cloneable {
     /**
      * Clone this entity and initialize the synchronization object
      * @return a clone of this entity
-     * @throws CloneNotSupportedException
+     * @throws CloneNotSupportedException if clone is not supported
      */
     protected Object cloneAndResetSynchronizer() throws CloneNotSupportedException {
         SynchronizedObject so = (SynchronizedObject) super.clone();

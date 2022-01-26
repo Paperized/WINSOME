@@ -2,21 +2,20 @@ package it.winsome.client;
 
 import it.winsome.client.config.ClientConfiguration;
 import it.winsome.common.dto.*;
+import it.winsome.common.entity.Comment;
 import it.winsome.common.entity.Post;
 import it.winsome.common.entity.User;
 import it.winsome.common.entity.enums.CurrencyType;
 import it.winsome.common.entity.enums.VotableType;
 import it.winsome.common.entity.enums.VoteType;
-import it.winsome.common.exception.NoTagsFoundException;
-import it.winsome.common.exception.SocketDisconnectedException;
-import it.winsome.common.exception.UserAlreadyExistsException;
-import it.winsome.common.exception.UserNotExistsException;
+import it.winsome.common.exception.*;
 import it.winsome.common.network.NetMessage;
 import it.winsome.common.network.enums.NetMessageType;
 import it.winsome.common.network.enums.NetResponseType;
 import it.winsome.common.service.interfaces.UserCallbackClient;
 import it.winsome.common.service.interfaces.UserCallbackServer;
 import it.winsome.common.WinsomeHelper;
+import it.winsome.common.validation.Validator;
 
 import java.io.IOException;
 import java.net.UnknownHostException;
@@ -95,13 +94,8 @@ public class ClientApplication implements AutoCloseable {
      * @throws NotBoundException if the service name was not found
      */
     public void initApplication() throws RemoteException, NotBoundException {
-        try {
-            clientConnector = new ClientConnector(configuration.serverTcpAddress,
-                    configuration.serverTcpPort, configuration.multicastIp, configuration.multicastPort);
-        } catch (UnknownHostException e) {
-            printError("Multicast IP %s is an unknown host!", configuration.multicastIp);
-            return;
-        }
+        clientConnector = new ClientConnector(configuration.serverTcpAddress,
+                configuration.serverTcpPort);
 
         Registry r = LocateRegistry.getRegistry(configuration.rmiServicePort);
         regUserSrv = (UserCallbackServer) r.lookup(configuration.rmiServiceName);
@@ -115,7 +109,12 @@ public class ClientApplication implements AutoCloseable {
     public void sendCommand(String command, String[] args) {
         BiConsumer<ClientApplication, String[]> consumer =
                 mapDispatcher.getOrDefault(command, ClientApplication::handleUnknown);
-        consumer.accept(this, args);
+
+        try {
+            consumer.accept(this, args);
+        } catch(InvalidParameterException e) {
+            printError("Parameter invalid: " + e.getMessage());
+        }
     }
 
     static {
@@ -163,9 +162,9 @@ public class ClientApplication implements AutoCloseable {
                 "list following\n" +
                 "follow username\n" +
                 "unfollow username\n" +
-                "blog\n" +
+                "blog [page]\n" +
                 "post \"title\" \"content\"\n" +
-                "show feed\n" +
+                "show feed [page]\n" +
                 "show post postId\n" +
                 "delete postId\n" +
                 "rewin postId\n" +
@@ -184,13 +183,15 @@ public class ClientApplication implements AutoCloseable {
         String password = WinsomeHelper.generateFromSHA256(args[1]);
         String[] tags = Arrays.copyOfRange(args, 2, args.length);
 
+        Validator.validateUsername(username);
+        Validator.validatePassword(password);
+        Validator.validateTags(Arrays.asList(tags));
+
         try {
             User createdUser = sender.regUserSrv.registerUser(username, password, tags);
-            WinsomeHelper.printlnDebug(createdUser.toString());
-        } catch (UserAlreadyExistsException ex) {
-            printError("Username %s already exists!", username);
-        } catch(NoTagsFoundException ex) {
-            printError("Atleast 1 tag is needed!");
+            printResponse("User created with username %s", createdUser.getUsername());
+        } catch (InvalidParameterException ex) {
+            printError(ex.toString());
         } catch (RemoteException e) {
             printError("RMI not working properly, did you call init? More: " + e.getMessage());
         }
@@ -205,14 +206,16 @@ public class ClientApplication implements AutoCloseable {
         String username = args[0];
         String password = WinsomeHelper.generateFromSHA256(args[1]);
 
+        Validator.validateUsername(username);
+        Validator.validatePassword(password);
+
         if(sender.clientState.isLoggedIn()) {
             printError("You are already logged in, logout from your current session!");
             return;
         }
 
         if(!sender.clientConnector.isConnected()) {
-            sender.clientConnector.setWalletNotifier(() -> sender.walletUpdatable.compareAndSet(false, true));
-            if(!sender.clientConnector.startConnector()) {
+            if(!sender.clientConnector.startTCP()) {
                 printError("Could not connect to server!");
                 return;
             }
@@ -227,7 +230,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.Login) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.UsernameNotExists) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.UsernameNotExists) {
                     printError("Username does not exists, register yourself with 'register'!");
                 } else if(result == NetResponseType.WrongPassword) {
                     printError("Password is invalid!");
@@ -242,6 +248,10 @@ public class ClientApplication implements AutoCloseable {
                     UserCallbackClient stub = (UserCallbackClient)
                             UnicastRemoteObject.exportObject(sender.clientState, 0);
                     sender.regUserSrv.registerUserCallback(username, stub);
+
+                    sender.clientConnector.startMulticast(
+                            loginDTO.multicastIp, loginDTO.multicastPort,
+                            () -> sender.walletUpdatable.compareAndSet(false, true));
                     printResponse("Welcome back %s, have fun here!", username);
                 } else {
                     printError("Unexpected response from server!");
@@ -284,15 +294,16 @@ public class ClientApplication implements AutoCloseable {
                 sender.clientState.logout();
                 sender.regUserSrv.unregisterUserCallback(sender.currentUser.getUsername(), sender.clientState);
                 UnicastRemoteObject.unexportObject(sender.clientState, true);
+                sender.clientConnector.disconnect();
             }
-        } catch (SocketDisconnectedException e) {
-            e.printStackTrace();
         } catch (UserNotExistsException e) {
             printError("Unexpected response from server!");
         } catch (NoSuchObjectException e) {
             printError("RMI Object error. More: " + e.getMessage());
         } catch (RemoteException e) {
             printError("RMI not working properly, did you call init? More: " + e.getMessage());
+        } catch (SocketDisconnectedException | IOException e) {
+            e.printStackTrace();
         }
     }
 
@@ -357,13 +368,12 @@ public class ClientApplication implements AutoCloseable {
         StringBuilder outputString = new StringBuilder(100);
         outputString.append("  ----------- My Followers -----------\n");
         int count = 0;
-        int elementsPerRow = 2;
         while (followingIterator.hasNext()) {
             count++;
             String follower = followingIterator.next();
             outputString.append("  ") // space between results
                     .append(count).append(") ").append(follower); // append actual result
-            if(count % elementsPerRow == 0 && followingIterator.hasNext()) {
+            if(followingIterator.hasNext()) {
                 outputString.append('\n'); // new row
             }
         }
@@ -387,13 +397,12 @@ public class ClientApplication implements AutoCloseable {
         StringBuilder outputString = new StringBuilder(100);
         outputString.append("  ----------- My Followings -----------\n");
         int count = 0;
-        int elementsPerRow = 2;
         while (followingIterator.hasNext()) {
             count++;
             String follower = followingIterator.next();
             outputString.append("  ") // space between results
                     .append(count).append(") ").append(follower); // append actual result
-            if(count % elementsPerRow == 0 && followingIterator.hasNext()) {
+            if(followingIterator.hasNext()) {
                 outputString.append('\n'); // new row
             }
         }
@@ -414,6 +423,8 @@ public class ClientApplication implements AutoCloseable {
         if(sender.checkServerConnection() || sender.checkLogin()) return;
         String user = args[0];
 
+        Validator.validateUsername(user);
+
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.Follow, NetMessage.getStringSize(user))
                 .writeString(user);
@@ -422,7 +433,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.Follow) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     sender.currentUser.addUserFollowed(user);
                     printResponse("You followed %s!", user);
                 } else if(result == NetResponseType.UsernameNotExists) {
@@ -449,6 +463,8 @@ public class ClientApplication implements AutoCloseable {
         if(sender.checkServerConnection() || sender.checkLogin()) return;
         String user = args[0];
 
+        Validator.validateUsername(user);
+
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.Unfollow, NetMessage.getStringSize(user))
                 .writeString(user);
@@ -457,7 +473,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.Unfollow) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     sender.currentUser.removeUserFollowed(user);
                     printResponse("You unfollowed %s!", user);
                 } else if(result == NetResponseType.UsernameNotExists) {
@@ -489,6 +508,8 @@ public class ClientApplication implements AutoCloseable {
             page = Integer.parseInt(args[0]);
         }
 
+        Validator.validatePage(page);
+
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.ViewBlog, 4)
                 .writeInt(page);
@@ -496,7 +517,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.ViewBlog) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     ViewBlogDTO myBlog = responseMessage.readObject(ViewBlogDTO::netDeserialize);
                     StringBuilder outputString = new StringBuilder(500);
                     outputString.append("  ----------- My Blog -----------\n");
@@ -505,18 +529,19 @@ public class ClientApplication implements AutoCloseable {
                         currentPost.setUsername(sender.currentUser.getUsername());
 
                         outputString.append(i + 1).append(')')
-                                .append(currentPost.isRewin() ? "  REWIN " : String.format("  %s ", currentPost.getTitle()))
-                                .append(currentPost.getCreationDate().toString())
-                                .append(" @").append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
+                                .append(currentPost.isRewin() ? String.format(" (Rewin of @%s) ", currentPost.getOriginalPost().getUsername()) : " (Post) ")
+                                .append(" Publisher @").append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
                         if(!currentPost.isRewin()) {
-                            outputString.append(currentPost.getContent()).append('\n');
+                            outputString.append(currentPost.getTitle()).append('\n')
+                                    .append(currentPost.getContent()).append('\n');
                         } else {
                             Post rewin = currentPost.getOriginalPost();
-                            outputString.append("-->").append(rewin.getTitle()).append("  ").append(rewin.getCreationDate().toString())
-                                    .append(" @").append(rewin.getUsername()).append("  [ID:").append(rewin.getId()).append(']').append('\n');
-                            outputString.append("-->").append(rewin.getContent().replaceAll("\n", "\n-->")).append('\n');
+                            outputString.append(rewin.getTitle()).append("  ")
+                                    .append("  [ID:").append(rewin.getId()).append("] ").append(rewin.getCreationDate().toString()).append('\n');
+                            outputString.append(rewin.getContent()).append('\n');
                         }
 
+                        outputString.append("Published in ").append(currentPost.getCreationDate()).append('\n');
                         outputString.append("Comments: ").append(currentPost.getCommentCount())
                                 .append(" | ").append("UPS: ").append(currentPost.getTotalUpvotes()).append(" DOWNS: ")
                                 .append(currentPost.getTotalDownvotes());
@@ -549,6 +574,9 @@ public class ClientApplication implements AutoCloseable {
         String title = args[0];
         String content = args[1];
 
+        Validator.validatePostTitle(title);
+        Validator.validatePostContent(content);
+
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.CreatePost, NetMessage.getStringSize(title, content))
                 .writeString(title)
@@ -558,7 +586,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.CreatePost) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     int postId = responseMessage.readInt();
                     printResponse("Post created with id %d!", postId);
                 } else if(result == NetResponseType.ClientNotLoggedIn) {
@@ -585,6 +616,8 @@ public class ClientApplication implements AutoCloseable {
             page = Integer.parseInt(args[0]);
         }
 
+        Validator.validatePage(page);
+
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.ShowFeed, 4)
                 .writeInt(page);
@@ -592,7 +625,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.ShowFeed) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     ShowFeedDTO myFeed = responseMessage.readObject(ShowFeedDTO::netDeserialize);
                     StringBuilder outputString = new StringBuilder(500);
                     outputString.append("  ----------- My Feed -----------\n");
@@ -600,18 +636,19 @@ public class ClientApplication implements AutoCloseable {
                         Post currentPost = myFeed.getPost(i);
 
                         outputString.append(i + 1).append(')')
-                                .append(currentPost.isRewin() ? "  REWIN " : String.format("  %s ", currentPost.getTitle()))
-                                .append(currentPost.getCreationDate().toString())
-                                .append(" @").append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
+                                .append(currentPost.isRewin() ? String.format(" (Rewin of @%s) ", currentPost.getOriginalPost().getUsername()) : " (Post) ")
+                                .append(" Publisher @").append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
                         if(!currentPost.isRewin()) {
-                            outputString.append(currentPost.getContent()).append('\n');
+                            outputString.append(currentPost.getTitle()).append('\n')
+                                    .append(currentPost.getContent()).append('\n');
                         } else {
                             Post rewin = currentPost.getOriginalPost();
-                            outputString.append("--> ").append(rewin.getTitle()).append("  ").append(rewin.getCreationDate().toString())
-                                    .append(" @").append(rewin.getUsername()).append("  [ID:").append(rewin.getId()).append(']').append('\n');
-                            outputString.append("-->").append(rewin.getContent().replaceAll("\n", "\n-->")).append('\n');
+                            outputString.append(rewin.getTitle()).append("  ")
+                                    .append("  [ID:").append(rewin.getId()).append("] ").append(rewin.getCreationDate().toString()).append('\n');
+                            outputString.append(rewin.getContent()).append('\n');
                         }
 
+                        outputString.append("Published in ").append(currentPost.getCreationDate()).append('\n');
                         outputString.append("Comments: ").append(currentPost.getCommentCount())
                                 .append(" | ").append("UPS: ").append(currentPost.getTotalUpvotes()).append(" DOWNS: ")
                                 .append(currentPost.getTotalDownvotes());
@@ -641,8 +678,10 @@ public class ClientApplication implements AutoCloseable {
      */
     private static void handleShowPost(ClientApplication sender, String[] args) {
         if(sender.checkServerConnection() || sender.checkLogin()) return;
-
         int postId = Integer.parseInt(args[0]);
+
+        Validator.validatePostId(postId);
+
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.ShowPost, 4)
                 .writeInt(postId);
@@ -650,28 +689,50 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.ShowPost) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     ShowPostDTO data = responseMessage.readObject(ShowPostDTO::netDeserialize);
                     Post currentPost = data.post;
                     if(currentPost == null) {
                         printError("Post with id %d does not exist!", postId);
                         return;
                     }
+
                     StringBuilder outputString = new StringBuilder(500);
-                    outputString.append("  ").append(currentPost.getTitle()).append("  ").append(currentPost.getCreationDate().toString())
-                            .append('@').append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
+                    outputString
+                            .append(currentPost.isRewin() ? String.format(" (Rewin of @%s) ", currentPost.getOriginalPost().getUsername()) : " (Post) ")
+                            .append(" @").append(currentPost.getUsername()).append("  [ID:").append(currentPost.getId()).append("]\n");
                     if(!currentPost.isRewin()) {
-                        outputString.append(currentPost.getContent()).append('\n');
+                        outputString.append(currentPost.getTitle()).append('\n')
+                                .append(currentPost.getContent()).append('\n');
                     } else {
                         Post rewin = currentPost.getOriginalPost();
-                        outputString.append("RW --> ").append(rewin.getTitle()).append("  ").append(rewin.getCreationDate().toString())
-                                .append(" @").append(rewin.getUsername()).append("  [ID:").append(rewin.getId()).append(']').append('\n');
-                        outputString.append("   -->").append(rewin.getContent().replaceAll("\n", "\n   -->")).append('\n');
+                        outputString.append(rewin.getTitle()).append("  ")
+                                .append("  [ID:").append(rewin.getId()).append("] ").append(rewin.getCreationDate().toString()).append('\n');
+                        outputString.append(rewin.getContent()).append('\n');
                     }
 
+                    outputString.append("Published in ").append(currentPost.getCreationDate()).append('\n');
                     outputString.append("Comments: ").append(currentPost.getCommentCount())
                             .append(" | ").append("UPS: ").append(currentPost.getTotalUpvotes()).append(" DOWNS: ")
-                            .append(currentPost.getTotalDownvotes());
+                            .append(currentPost.getTotalDownvotes()).append('\n');
+
+                    Set<Comment> comments = currentPost.getComments();
+                    if(comments.size() > 0) {
+                        outputString.append("> [Comments] <\n");
+                        Iterator<Comment> it = comments.iterator();
+                        while(it.hasNext()) {
+                            Comment comment = it.next();
+                            outputString.append("@").append(comment.getOwner()).append(" says -> ").append(comment.getContent());
+                            if(it.hasNext()) {
+                                outputString.append('\n');
+                            }
+                        }
+                    } else {
+                        outputString.append("> [No Comments Available] <");
+                    }
 
                     printResponse(outputString.toString());
                 } else if(result == NetResponseType.ClientNotLoggedIn) {
@@ -694,6 +755,9 @@ public class ClientApplication implements AutoCloseable {
     private static void handleDeletePost(ClientApplication sender, String[] args) {
         if(sender.checkServerConnection() || sender.checkLogin()) return;
         int postId = Integer.parseInt(args[0]);
+
+        Validator.validatePostId(postId);
+
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.DeletePost, 4)
                 .writeInt(postId);
@@ -701,7 +765,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.DeletePost) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     printResponse("Post with id %d deleted successfully!", postId);
                 } else if(result == NetResponseType.NotAuthorized) {
                     printError("You are not authorized to delete this post!");
@@ -726,8 +793,10 @@ public class ClientApplication implements AutoCloseable {
      */
     private static void handleRewinPost(ClientApplication sender, String[] args) {
         if(sender.checkServerConnection() || sender.checkLogin()) return;
-
         int postId = Integer.parseInt(args[0]);
+
+        Validator.validatePostId(postId);
+
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.RewinPost, 4)
                 .writeInt(postId);
@@ -735,7 +804,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.RewinPost) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     int rewinId = responseMessage.readInt();
                     printResponse("Post rewinned with id %d!", rewinId);
                 } else if(result == NetResponseType.NotAuthorized) {
@@ -765,10 +837,9 @@ public class ClientApplication implements AutoCloseable {
         if(sender.checkServerConnection() || sender.checkLogin()) return;
         int postId = Integer.parseInt(args[0]);
         VoteType vote = VoteType.fromString(args[1]);
-        if(vote == null) {
-            printError("Vote can be either \"+1\" or \"-1\"");
-            return;
-        }
+
+        Validator.validatePostId(postId);
+        Validator.validateVoteType(args[1]);
 
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.RatePost, 12)
@@ -779,7 +850,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.RatePost) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     printResponse("You gave a %s to this post!", vote.toString());
                 } else if(result == NetResponseType.UserSelfVote) {
                     printError("You cannot vote to your own post!");
@@ -811,6 +885,9 @@ public class ClientApplication implements AutoCloseable {
         int postId = Integer.parseInt(args[0]);
         String comment = args[1];
 
+        Validator.validatePostId(postId);
+        Validator.validateCommentContent(comment);
+
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                         NetMessageType.CreateComment, 4 + NetMessage.getStringSize(comment))
                 .writeInt(postId)
@@ -819,7 +896,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.CreateComment) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     int commentId = responseMessage.readInt();
                     printResponse("Comment published with id %d!", commentId);
                 } else if(result == NetResponseType.UserSelfComment) {
@@ -848,11 +928,9 @@ public class ClientApplication implements AutoCloseable {
         if(sender.checkServerConnection() || sender.checkLogin()) return;
         CurrencyType currencyType = CurrencyType.Winsome;
         if(args.length > 0) {
+            Validator.validateCurrencyType(args[0]);
+
             currencyType = CurrencyType.fromString(args[0]);
-            if(currencyType == null) {
-                printError("Currency unavailable, choose between [winsome, btc]!");
-                return;
-            }
         }
 
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
@@ -862,7 +940,10 @@ public class ClientApplication implements AutoCloseable {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
             if(responseMessage.getType() == NetMessageType.Wallet) {
                 NetResponseType result = NetResponseType.fromId(responseMessage.readInt());
-                if(result == NetResponseType.Success) {
+                if(result == NetResponseType.InvalidParameters) {
+                    String message = responseMessage.readString();
+                    printError(message);
+                } else if(result == NetResponseType.Success) {
                     GetWalletDTO dto = responseMessage.readObject(GetWalletDTO::netDeserialize);
                     StringBuilder builder = new StringBuilder(400);
                     builder.append(String.format("------- Wallet in %s --------\n", currencyType))
@@ -941,7 +1022,7 @@ public class ClientApplication implements AutoCloseable {
      * @param args arguments
      */
     public static void printResponse(String format, Object... args) {
-        System.out.printf(String.format("< %s\n", format), args);
+        System.out.printf(String.format("< %s\n\n", format), args);
     }
 
     /**
@@ -950,7 +1031,7 @@ public class ClientApplication implements AutoCloseable {
      * @param args arguments
      */
     public static void printError(String format, Object... args) {
-        System.out.printf(String.format("! %s\n", format), args);
+        System.out.printf(String.format("! %s\n\n", format), args);
     }
 
     /**
@@ -969,7 +1050,7 @@ public class ClientApplication implements AutoCloseable {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() {
         clearResources();
     }
 }

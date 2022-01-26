@@ -7,7 +7,7 @@ import it.winsome.server.ServerLogic;
  * Automatically save all entities of the social network
  */
 public class AutoSaveData implements Runnable {
-    ServerLogic serverLogic;
+    private final ServerLogic serverLogic;
 
     public AutoSaveData(ServerLogic serverLogic) {
         this.serverLogic = serverLogic;

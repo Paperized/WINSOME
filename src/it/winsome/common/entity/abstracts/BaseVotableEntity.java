@@ -1,6 +1,5 @@
 package it.winsome.common.entity.abstracts;
 
-import it.winsome.common.SynchronizedObject;
 import it.winsome.common.entity.Vote;
 import it.winsome.common.entity.enums.VoteType;
 
@@ -33,6 +32,11 @@ public abstract class BaseVotableEntity extends BaseSocialEntity {
         }
 
         votesMap.put(vote.getFrom(), vote);
+        if(vote.getType() == VoteType.UP) {
+            totalUpvotes++;
+        } else {
+            totalDownvotes--;
+        }
         return true;
     }
 

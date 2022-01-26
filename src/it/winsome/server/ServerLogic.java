@@ -10,8 +10,6 @@ import it.winsome.common.entity.enums.CurrencyType;
 import it.winsome.common.entity.enums.VotableType;
 import it.winsome.common.entity.enums.VoteType;
 import it.winsome.common.exception.*;
-import it.winsome.common.json.JsonDeserializeEmptyMap;
-import it.winsome.common.json.JsonSerializeMapIdOnly;
 import it.winsome.common.network.enums.NetResponseType;
 import it.winsome.common.service.interfaces.UserCallbackClient;
 import it.winsome.server.session.ConnectionSession;
@@ -100,7 +98,6 @@ public class ServerLogic {
     public synchronized boolean saveToDisk() {
         boolean allCompleted = true;
         Gson gsonPost = new GsonBuilder()
-                .registerTypeAdapter(Map.class, new JsonSerializeMapIdOnly<Comment>())
                 .setPrettyPrinting()
                 .create();
 
@@ -184,9 +181,7 @@ public class ServerLogic {
         if(initialized) throw new DataAlreadyLoadedException();
         initialized = true;
         boolean allCompleted = true;
-        Gson gsonPost = new GsonBuilder()
-                .registerTypeAdapter(Map.class, new JsonDeserializeEmptyMap<Comment, Comment>())
-                .create();
+        Gson gsonPost = new GsonBuilder().create();
 
         try {
             String jsonPost = new String(Files.readAllBytes(Paths.get(dataFolder + "posts.json")), StandardCharsets.UTF_8);
@@ -194,6 +189,7 @@ public class ServerLogic {
             posts.sort((o1, o2) -> o2.getCreationDate().compareTo(o1.getCreationDate()));
             int maxPostIdTemp = 0;
             for(Post post : posts) {
+                post.setTotalComments(0);
                 postMap.put(post, post);
                 maxPostIdTemp = Math.max(maxPostIdTemp, post.getId());
             }
@@ -285,6 +281,7 @@ public class ServerLogic {
 
         Post p = new Post(-1, "gianmarco", "Youtube è meglio delle crypto!", "YOUTUBE REGNA POGGGGGGGGG XD");
         addPost(p);
+        addVote(p.getId(), VotableType.Post, VoteType.UP, "piero");
         Comment c = new Comment(-1, "piero", "Bel post niente da dire");
         c.setPostId(p.getId());
         c.addVote(new Vote("ghfjy787", VoteType.UP));
@@ -377,8 +374,8 @@ public class ServerLogic {
     /**
      * Unregister a callback interface
      * @param username username
-     * @param callbackObject
-     * @throws UserNotExistsException
+     * @param callbackObject callback
+     * @throws UserNotExistsException exception
      */
     public void unregisterUserCallback(String username, UserCallbackClient callbackObject) throws UserNotExistsException {
         username = WinsomeHelper.normalizeUsername(username);
@@ -461,8 +458,8 @@ public class ServerLogic {
      * Notify the receiver
      * @param from user following
      * @param to user receiving the follow
-     * @throws RemoteException
-     * @throws NullPointerException
+     * @throws RemoteException remote exception
+     * @throws NullPointerException null exception
      */
     public void notifyFollowAdded(String from, String to) throws RemoteException, NullPointerException {
         synchronized (registeredCallbacks) {
@@ -477,8 +474,8 @@ public class ServerLogic {
      * Notify the receiver
      * @param from user removing the follow
      * @param to user being removed
-     * @throws RemoteException
-     * @throws NullPointerException
+     * @throws RemoteException remote exception
+     * @throws NullPointerException exception
      */
     public void notifyFollowRemoved(String from, String to) throws RemoteException, NullPointerException {
         synchronized (registeredCallbacks) {
@@ -848,32 +845,40 @@ public class ServerLogic {
      * @param entityId entity id
      * @param type entity type
      * @param vote vote type
-     * @param user caller
+     * @param username caller
      * @return result response
      */
-    public NetResponseType addVote(int entityId, VotableType type, VoteType vote, User user) {
+    public NetResponseType addVote(int entityId, VotableType type, VoteType vote, String username) {
         if(type == VotableType.Post) {
+            Lock rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+            User user = registeredUsers.get(username);
+            rLock.unlock();
+
+            if(user == null) {
+                return ClientNotLoggedIn;
+            }
+
             Post post = getRealPost(entityId);
             if(post == null) {
                 return NetResponseType.EntityNotExists;
             }
 
-            post.prepareRead();
+            SynchronizedObject.prepareInWriteMode(post);
             user.prepareRead();
             if(post.getUsername().equals(user.getUsername())) {
-                post.releaseRead();
+                post.releaseWrite();
                 user.releaseRead();
                 return NetResponseType.UserSelfVote;
             }
 
             if(!user.hasUserFollowed(post.getUsername())) {
-                post.releaseRead();
+                post.releaseWrite();
                 user.releaseRead();
                 return NetResponseType.PostNotInFeed;
             }
 
             if(post.getVote(user.getUsername()) != null) {
-                post.releaseRead();
+                post.releaseWrite();
                 user.releaseRead();
                 return NetResponseType.UserAlreadyVoted;
             }
@@ -881,34 +886,43 @@ public class ServerLogic {
             Vote voteEntity = new Vote(user.getUsername(), vote);
             post.addVote(voteEntity);
             voteEntity.enableSynchronization(true);
-            post.releaseRead();
+            post.releaseWrite();
             user.releaseRead();
+
             return NetResponseType.Success;
         } else if(type == VotableType.Comment) {
+            Lock rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
+            User user = registeredUsers.get(username);
+            rLock.unlock();
+
+            if(user == null) {
+                return ClientNotLoggedIn;
+            }
+
             Comment comment = getRealComment(entityId);
             if(comment == null) {
                 return NetResponseType.EntityNotExists;
             }
 
-            comment.prepareRead();
+            SynchronizedObject.prepareInWriteMode(comment);
             user.prepareRead();
             if(comment.getOwner().equals(user.getUsername())) {
-                comment.releaseRead();
+                comment.releaseWrite();
                 user.releaseRead();
                 return NetResponseType.UserSelfVote;
             }
 
             if(comment.getVote(user.getUsername()) != null) {
-                comment.releaseRead();
+                comment.releaseWrite();
                 user.releaseRead();
                 return NetResponseType.UserAlreadyVoted;
             }
 
             Vote voteEntity = new Vote(user.getUsername(), vote);
             comment.addVote(voteEntity);
-            voteEntity.enableSynchronization(true);
-            comment.releaseRead();
+            comment.releaseWrite();
             user.releaseRead();
+            voteEntity.enableSynchronization(true);
             return NetResponseType.Success;
         }
 

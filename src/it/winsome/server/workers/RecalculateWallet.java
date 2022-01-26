@@ -83,20 +83,6 @@ public class RecalculateWallet implements Runnable {
         int it = post.getCurrentIteration() + 1;
 
         Set<String> contributors = new HashSet<>();
-        double votesScore = 0;
-
-        for(Vote vote : post.getVotes()) {
-            SynchronizedObject.prepareInWriteMode(vote);
-            if(!vote.isNeedIteration()) {
-                vote.releaseWrite();
-                continue;
-            }
-            vote.setNeedIteration(true);
-            contributors.add(vote.getFrom());
-            votesScore += vote.getType() == VoteType.UP ? 1 : -1;
-            vote.releaseWrite();
-        }
-        votesScore = Math.min(votesScore, 0);
 
         double commentsScore = 0;
         Map<String, Integer> commentsCount = new HashMap<>();
@@ -126,7 +112,25 @@ public class RecalculateWallet implements Runnable {
             comment.releaseWrite();
         }
 
-        double total = (Math.log(votesScore + 1) + Math.log(commentsScore + 1)) / it;
+        double votesScore = 0;
+        for(Vote vote : post.getVotes()) {
+            SynchronizedObject.prepareInWriteMode(vote);
+            if(!vote.isNeedIteration()) {
+                vote.releaseWrite();
+                continue;
+            }
+            vote.setNeedIteration(false);
+            votesScore += vote.getType() == VoteType.UP ? 1 : -1;
+            if(vote.getType() == VoteType.DOWN) {
+                contributors.remove(vote.getFrom());
+            } else {
+                contributors.add(vote.getFrom());
+            }
+            vote.releaseWrite();
+        }
+        votesScore = Math.max(votesScore, 0);
+
+        double total = (Math.log(votesScore + 1) + Math.log(commentsScore + 1)) / (double)it;
         if(contributors.size() == 0) {
             post.releaseWrite();
             return;

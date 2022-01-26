@@ -7,7 +7,7 @@ public enum CurrencyType {
     Winsome(0),
     Bitcoin(1);
 
-    private int id;
+    private final int id;
     CurrencyType(int id) {
         this.id = id;
     }

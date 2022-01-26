@@ -63,7 +63,6 @@ public class ViewBlogDTO {
                 .writeInt(post.getTotalUpvotes())
                 .writeInt(post.getTotalDownvotes());
 
-        WinsomeHelper.printlnDebug(post.toString());
     }
 
     private static Post netPostDeserialize(NetMessage from) {
@@ -85,7 +84,6 @@ public class ViewBlogDTO {
         post.setTotalUpvotes(from.readInt());
         post.setTotalDownvotes(from.readInt());
 
-        WinsomeHelper.printlnDebug(post.toString());
         return post;
     }
 
