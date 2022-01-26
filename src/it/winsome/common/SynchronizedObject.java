@@ -24,6 +24,10 @@ public abstract class SynchronizedObject implements Cloneable {
         } catch(SynchronizedInitException e) { }
     }
 
+    /**
+     * Initialize the synchronized object, by default the synchronization is disabled but can be enabled after the init
+     * @throws SynchronizedInitException if the object is already initialized
+     */
     protected void initSynchronizedObject() throws SynchronizedInitException {
         if(isInitialized) throw new SynchronizedInitException();
         rwLock = new ReentrantReadWriteLock();
@@ -32,6 +36,10 @@ public abstract class SynchronizedObject implements Cloneable {
         isInitialized = true;
     }
 
+    /**
+     * Throw an exception if the synchronization is enabled and the thread does not own a read lock (or write)
+     * @throws SynchronizationException if no read lock is owned
+     */
     protected void checkReadSynchronization() throws SynchronizationException {
         if(synchronizationEnabled) {
             if(!isThreadReading() && !isThreadWriting())
@@ -39,6 +47,10 @@ public abstract class SynchronizedObject implements Cloneable {
         }
     }
 
+    /**
+     * Throw an exception if the synchronization is enabled and the thread does not own the write lock
+     * @throws SynchronizationException if no write lock is owned
+     */
     protected void checkWriteSynchronization() throws SynchronizationException {
         if(synchronizationEnabled) {
             if(!isThreadWriting())
@@ -46,18 +58,29 @@ public abstract class SynchronizedObject implements Cloneable {
         }
     }
 
+    /**
+     * Acquire the read lock
+     */
     public void prepareRead() {
         if(!synchronizationEnabled || isThreadReading()) return;
         rwLock.readLock().lock();
         readHolders.add(Thread.currentThread());
     }
 
+    /**
+     * Acquire the write lock, upgrading from read to write is not permitted and will result in an exception
+     * @throws DeadlockPreventionException if the caller has a read lock
+     */
     public void prepareWrite() throws DeadlockPreventionException {
         if(!synchronizationEnabled || isThreadWriting()) return;
         if(isThreadReading()) throw new DeadlockPreventionException();
         rwLock.writeLock().lock();
     }
 
+    /**
+     * Downgrade the caller from having a write lock to a read lock
+     * @return
+     */
     public boolean downgradeToRead() {
         if(!synchronizationEnabled || !isThreadWriting()) return false;
         prepareRead();
@@ -65,39 +88,73 @@ public abstract class SynchronizedObject implements Cloneable {
         return true;
     }
 
+    /**
+     * Release a read lock
+     */
     public void releaseRead() {
         if(!synchronizationEnabled || !isThreadReading()) return;
         rwLock.readLock().unlock();
         readHolders.remove(Thread.currentThread());
     }
 
+    /**
+     * Release a write lock
+     */
     public void releaseWrite() {
         if(!synchronizationEnabled || !isThreadWriting()) return;
         rwLock.writeLock().unlock();
     }
 
+    /**
+     * Check if this thread has a read lock
+     * @return
+     */
     public boolean isThreadReading() {
         return readHolders.contains(Thread.currentThread());
     }
 
+    /**
+     * Check if this thread has a write lock
+     * @return
+     */
     public boolean isThreadWriting() {
         return rwLock.isWriteLockedByCurrentThread();
     }
 
+    /**
+     * Enable the synchronization for this object, can be used recursively in case of complex objects
+     * @param recursive is the synchronization recursive
+     * @param <T> conversion type
+     * @return this entity
+     */
     public <T extends SynchronizedObject> T enableSynchronization(boolean recursive) {
         synchronizationEnabled = true;
         return (T) this;
     }
 
+    /**
+     * Disable the synchronization for this entity
+     * @param <T> conversion type
+     * @return this entity
+     */
     public <T extends SynchronizedObject> T disableSynchronization() {
         synchronizationEnabled = false;
         return (T) this;
     }
 
+    /**
+     * Check if the synchronization is enabled
+     * @return
+     */
     public boolean isSynchronizationEnabled() {
         return synchronizationEnabled;
     }
 
+    /**
+     * Clone this entity and initialize the synchronization object
+     * @return a clone of this entity
+     * @throws CloneNotSupportedException
+     */
     protected Object cloneAndResetSynchronizer() throws CloneNotSupportedException {
         SynchronizedObject so = (SynchronizedObject) super.clone();
         so.isInitialized = false;
@@ -107,6 +164,11 @@ public abstract class SynchronizedObject implements Cloneable {
         return so;
     }
 
+    /**
+     * Utility function acquire the write lock without handling exceptions
+     * @param so entity
+     * @return true if the lock was acquired
+     */
     public static boolean prepareInWriteMode(SynchronizedObject so) {
         try {
             so.prepareWrite();

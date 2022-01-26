@@ -15,6 +15,9 @@ import it.winsome.server.ServerMain;
 import java.net.*;
 import java.util.*;
 
+/**
+ * Its task is to recalculate the new rewards of each post and notifying every client in multicast
+ */
 public class RecalculateWallet implements Runnable {
     private final ServerLogic serverLogic;
     private final DatagramSocket multicastSocket;
@@ -70,6 +73,11 @@ public class RecalculateWallet implements Runnable {
         sendMulticastMessage();
     }
 
+    /**
+     * Calculate the next iteration for this post if anything changed, the rewards is added into a map passed in input
+     * @param post post to recalculate
+     * @param interactingUsers map of rewards
+     */
     private void calculateIterationAmount(Post post, Map<String, List<Double>> interactingUsers) {
         SynchronizedObject.prepareInWriteMode(post);
         int it = post.getCurrentIteration() + 1;
@@ -143,12 +151,18 @@ public class RecalculateWallet implements Runnable {
         }
     }
 
+    /**
+     * Notify clients via multicast
+     */
     private void sendMulticastMessage() {
         if(!writableMessage.sendMessage(multicastSocket, multicastAddress, multicastPort)) {
             WinsomeHelper.printlnDebug("Error while sending multicast message!");
         }
     }
 
+    /**
+     * Close the multicast connection
+     */
     public void shutdownMulticast() {
         multicastSocket.close();
     }

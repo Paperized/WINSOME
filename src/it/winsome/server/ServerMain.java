@@ -74,10 +74,17 @@ public class ServerMain {
         tcpServer.startServer();
     }
 
+    /**
+     * Get the ServerLogic object
+     * @return the server logic
+     */
     public static ServerLogic getServerLogic() {
         return serverLogic;
     }
 
+    /**
+     * Clean the connections and additional thread working
+     */
     private static void onQuit() {
         try {
             WinsomeHelper.printlnDebug("Closing...!");

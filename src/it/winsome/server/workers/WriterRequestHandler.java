@@ -11,6 +11,10 @@ import java.io.IOException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.WritableByteChannel;
 
+/**
+ * Its task is to write the pending message to a client, usually because of NIO nature, the message might be written
+ * partially, we add it on a pending queue and keep trying from where we started
+ */
 public class WriterRequestHandler implements Runnable {
     private static ServerLogic serverLogic;
     private final ServerConnector server;

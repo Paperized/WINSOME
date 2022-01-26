@@ -34,6 +34,11 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static it.winsome.common.network.enums.NetResponseType.*;
 
+/**
+ * Main logic of the social network, it offers many functionality thread safe to query or change
+ * other entities.
+ * It is pure social network logic and does not involve any client socket except from the makeSession which needs a SelectionKey
+ */
 public class ServerLogic {
     private final Map<String, User> registeredUsers;
     private final ReadWriteLock registeredUsersRW;
@@ -88,6 +93,10 @@ public class ServerLogic {
         }
     }
 
+    /**
+     * Save all entities in different files
+     * @return true if all entities have been saved, false if saved partially
+     */
     public synchronized boolean saveToDisk() {
         boolean allCompleted = true;
         Gson gsonPost = new GsonBuilder()
@@ -166,6 +175,11 @@ public class ServerLogic {
         return allCompleted;
     }
 
+    /**
+     * Load all entities from disk on startup
+     * @return true if all data have been loaded, false if partially
+     * @throws DataAlreadyLoadedException if the load is called more then one time
+     */
     public synchronized boolean loadFromDisk() throws DataAlreadyLoadedException {
         if(initialized) throw new DataAlreadyLoadedException();
         initialized = true;
@@ -309,6 +323,15 @@ public class ServerLogic {
         saveToDisk();
     }
 
+    /**
+     * Create a new user
+     * @param username username
+     * @param password sha516 password
+     * @param tags tags
+     * @return a copy of the new user
+     * @throws UserAlreadyExistsException if the username already exists
+     * @throws NoTagsFoundException if no tags are found
+     */
     public User registerUser(String username, String password, String[] tags) throws UserAlreadyExistsException, NoTagsFoundException {
         username = WinsomeHelper.normalizeUsername(username);
         User user = new User(username, password, tags);
@@ -326,6 +349,12 @@ public class ServerLogic {
         return user;
     }
 
+    /**
+     * Register an interface for asynchronous callback to client
+     * @param username username
+     * @param callbackObject callback interface
+     * @throws UserNotExistsException if the user does not exists
+     */
     public void registerUserCallback(String username, UserCallbackClient callbackObject) throws UserNotExistsException {
         username = WinsomeHelper.normalizeUsername(username);
         Lock rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
@@ -345,6 +374,12 @@ public class ServerLogic {
         }
     }
 
+    /**
+     * Unregister a callback interface
+     * @param username username
+     * @param callbackObject
+     * @throws UserNotExistsException
+     */
     public void unregisterUserCallback(String username, UserCallbackClient callbackObject) throws UserNotExistsException {
         username = WinsomeHelper.normalizeUsername(username);
         Lock rLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
@@ -360,6 +395,11 @@ public class ServerLogic {
         }
     }
 
+    /**
+     * Remove a selection key from the session
+     * @param caller client
+     * @return true if removed
+     */
     public boolean removeSession(SelectionKey caller) {
         if(caller == null) throw new NullPointerException("Caller cannot be null");
         User current = ((ConnectionSession) caller.attachment()).getUserLogged();
@@ -374,6 +414,13 @@ public class ServerLogic {
         return false;
     }
 
+    /**
+     * Create a new session between this username and this caller
+     * @param username username
+     * @param password password
+     * @param caller caller
+     * @return result response
+     */
     public NetResponseType makeSession(String username, String password, SelectionKey caller) {
         Lock sessionLock = WinsomeHelper.acquireWriteLock(currentSessionsRW);
         if(currentSessions.get(username) != null) {
@@ -410,6 +457,13 @@ public class ServerLogic {
         return NetResponseType.Success;
     }
 
+    /**
+     * Notify the receiver
+     * @param from user following
+     * @param to user receiving the follow
+     * @throws RemoteException
+     * @throws NullPointerException
+     */
     public void notifyFollowAdded(String from, String to) throws RemoteException, NullPointerException {
         synchronized (registeredCallbacks) {
             UserCallbackClient cb = registeredCallbacks.get(to);
@@ -419,6 +473,13 @@ public class ServerLogic {
         }
     }
 
+    /**
+     * Notify the receiver
+     * @param from user removing the follow
+     * @param to user being removed
+     * @throws RemoteException
+     * @throws NullPointerException
+     */
     public void notifyFollowRemoved(String from, String to) throws RemoteException, NullPointerException {
         synchronized (registeredCallbacks) {
             UserCallbackClient cb = registeredCallbacks.get(to);
@@ -428,6 +489,12 @@ public class ServerLogic {
         }
     }
 
+    /**
+     * Add follow from a user to another
+     * @param from user following
+     * @param to user followed
+     * @return result response
+     */
     public NetResponseType addFollow(String from, String to) {
         if(from.equalsIgnoreCase(to)) {
             return UserSelfFollow;
@@ -457,6 +524,12 @@ public class ServerLogic {
         }
     }
 
+    /**
+     * Remove follow
+     * @param from user removing
+     * @param to user removed
+     * @return result response
+     */
     public NetResponseType removeFollow(String from, String to) {
         if(from.equalsIgnoreCase(to)) {
             return UserSelfFollow;
@@ -489,6 +562,12 @@ public class ServerLogic {
         }
     }
 
+    /**
+     * Get the feed (paginated) of a certain user
+     * @param username username
+     * @param page page
+     * @return a list copy
+     */
     public List<Post> getFeedByUsername(String username, int page) {
         final int pageSize = 5;
         User user;
@@ -534,6 +613,12 @@ public class ServerLogic {
         return posts;
     }
 
+    /**
+     * Get the blog posts (paginated) of a certain username
+     * @param username username
+     * @param page page
+     * @return result response
+     */
     public List<Post> getBlogByUsername(String username, int page) {
         final int pageSize = 5;
         int pageStart = page * pageSize;
@@ -551,6 +636,12 @@ public class ServerLogic {
         return result;
     }
 
+    /**
+     * Find suggested users by common tags
+     * @param tags common tags
+     * @param skipUsername user to be skipped (usually the caller)
+     * @return a list of similar users
+     */
     public List<User> getSuggestedUsersByTags(Collection<String> tags, String skipUsername) {
         List<User> similarUsers = new ArrayList<>();
 
@@ -571,6 +662,11 @@ public class ServerLogic {
         return similarUsers;
     }
 
+    /**
+     * Add a post to the social network, it can also be a REWIN by setting the OriginalPost field
+     * @param post Post to be added
+     * @return result response
+     */
     public NetResponseType addPost(Post post) {
         Post inserted;
         Post realOriginalPost = null;
@@ -617,6 +713,11 @@ public class ServerLogic {
         return Success;
     }
 
+    /**
+     * Get the post copy
+     * @param id id post
+     * @return post copy
+     */
     public Post getPost(int id) {
         Lock postLock = WinsomeHelper.acquireReadLock(postMapRW);
         Post post = postMap.get(new Post(id));
@@ -632,6 +733,11 @@ public class ServerLogic {
         return post;
     }
 
+    /**
+     * Get the real post reference
+     * @param id id post
+     * @return post
+     */
     private Post getRealPost(int id) {
         Lock postLock = WinsomeHelper.acquireReadLock(postMapRW);
         Post post = postMap.get(new Post(id));
@@ -640,6 +746,11 @@ public class ServerLogic {
         return post;
     }
 
+    /**
+     * Remove a post by id, then remove all rewin and comments referred to that post
+     * @param id id post
+     * @return true if removed
+     */
     public boolean removePost(int id) {
         List<Post> deletedPosts = new ArrayList<>();
 
@@ -709,6 +820,13 @@ public class ServerLogic {
         return true;
     }
 
+    /**
+     * Remove the post only if the caller is the user
+     * @param id post id
+     * @param from caller
+     * @return true if removed
+     * @throws NoAuthorizationException if not authorized
+     */
     public boolean removePostIfOwner(int id, String from) throws NoAuthorizationException {
         Post post = getRealPost(id);
         if(post == null) {
@@ -725,6 +843,14 @@ public class ServerLogic {
         return removePost(id);
     }
 
+    /**
+     * Add a vote to an entity
+     * @param entityId entity id
+     * @param type entity type
+     * @param vote vote type
+     * @param user caller
+     * @return result response
+     */
     public NetResponseType addVote(int entityId, VotableType type, VoteType vote, User user) {
         if(type == VotableType.Post) {
             Post post = getRealPost(entityId);
@@ -789,6 +915,12 @@ public class ServerLogic {
         return NetResponseType.InvalidParameters;
     }
 
+    /**
+     * Add a comment to a post
+     * @param comment comment to be added
+     * @param user caller
+     * @return result response
+     */
     public NetResponseType addComment(Comment comment, User user) {
         Post targetPost = getRealPost(comment.getPostId());
         if(targetPost == null) {
@@ -829,6 +961,7 @@ public class ServerLogic {
         return Success;
     }
 
+    //unused
     public Comment getComment(int id) {
         Lock commentLock = WinsomeHelper.acquireReadLock(commentMapRW);
         Comment comment = commentMap.get(id);
@@ -844,6 +977,11 @@ public class ServerLogic {
         return comment;
     }
 
+    /**
+     * Get the real reference to a comment by id
+     * @param id comment id
+     * @return comment
+     */
     private Comment getRealComment(int id) {
         Lock commentLock = WinsomeHelper.acquireReadLock(commentMapRW);
         Comment comment = commentMap.get(id);
@@ -852,6 +990,13 @@ public class ServerLogic {
         return comment;
     }
 
+    /**
+     * Get a wallet copy of a user by currency
+     * @param username username
+     * @param currency currency
+     * @return the wallet copy
+     * @throws IOException if the btc URL call was unsuccessful
+     */
     public Wallet getWallet(String username, CurrencyType currency) throws IOException {
         Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
         if(!registeredUsers.containsKey(username)) {
@@ -884,6 +1029,11 @@ public class ServerLogic {
         return copy;
     }
 
+    /**
+     * Get the real reference of a user by username
+     * @param username username
+     * @return the user
+     */
     public User getRealUserByUsername(String username) {
         Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
         User user = registeredUsers.get(username);
@@ -892,6 +1042,11 @@ public class ServerLogic {
         return user;
     }
 
+    /**
+     * Check if the user exists
+     * @param username username
+     * @return true if exists
+     */
     public boolean doUserExists(String username) {
         Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
         boolean res = registeredUsers.containsKey(username);
@@ -900,20 +1055,34 @@ public class ServerLogic {
         return res;
     }
 
+    /**
+     * Require the users resources, then acquire a read lock on it (to be released later with unlockUsers)
+     * @return the user resource
+     */
     public Map<String, User> getUsersResource() {
         WinsomeHelper.acquireReadLock(registeredUsersRW);
         return registeredUsers;
     }
 
+    /**
+     * Unlocks the users lock
+     */
     public void unlockUsers() {
         registeredUsersRW.readLock().unlock();
     }
 
+    /**
+     * Require the post resources, then acquire a read lock on it (to be released later with unlockPosts)
+     * @return the post resource
+     */
     public Collection<Post> getPostsResource() {
         WinsomeHelper.acquireReadLock(postMapRW);
         return postMap.values();
     }
 
+    /**
+     * Unlocks the posts lock
+     */
     public void unlockPosts() {
         postMapRW.readLock().unlock();
     }

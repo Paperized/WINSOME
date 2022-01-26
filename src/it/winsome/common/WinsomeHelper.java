@@ -12,29 +12,51 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+/**
+ * Provide common functions
+ */
 public class WinsomeHelper {
     private static boolean debugMode = false;
     public static boolean isDebugMode() { return debugMode; }
     public static void setDebugMode(boolean debugMode) { WinsomeHelper.debugMode = debugMode; }
 
+    /**
+     * Print a string if in debug mode
+     * @param str string
+     */
     public static void printDebug(String str) {
         if(debugMode) {
             System.out.print(str);
         }
     }
 
+    /**
+     * Print a formatted string if in debug mode
+     * @param format formatted string
+     * @param args arguments
+     */
     public static void printfDebug(String format, Object... args) {
         if(debugMode) {
             System.out.printf(String.format("< %s\n", format), args);
         }
     }
 
+    /**
+     * PrintLn a string if in debug mode
+     * @param str
+     */
     public static void printlnDebug(String str) {
         if(debugMode) {
             System.out.println(str);
         }
     }
 
+    /**
+     * Unify an iterator in a formatted string similar to Arrays.toString()
+     * @param it iterator
+     * @param <T> type
+     * @return formatted string
+     */
     public static <T> String iteratorToString(Iterator<T> it) {
         if(it == null) throw new NullPointerException();
         StringBuilder builder = new StringBuilder(40);
@@ -49,36 +71,64 @@ public class WinsomeHelper {
         return builder.append(']').toString();
     }
 
+    /**
+     * Acquire a read lock
+     * @param rwLock rwlock
+     * @return lock
+     */
     public static Lock acquireReadLock(ReadWriteLock rwLock) {
         Lock rLock = rwLock.readLock();
         rLock.lock();
         return rLock;
     }
 
+    /**
+     * Acquire a write lock
+     * @param rwLock rwlock
+     * @return lock
+     */
     public static Lock acquireWriteLock(ReadWriteLock rwLock) {
         Lock wLock = rwLock.writeLock();
         wLock.lock();
         return wLock;
     }
 
+    /**
+     * Release all locks
+     * @param locks locks
+     */
     public static void releaseAllLocks(Lock... locks) {
         for(Lock lock : locks) {
             lock.unlock();
         }
     }
 
+    /**
+     * Acquire the read lock for all synchronized objects
+     * @param col collection of synchronized objects
+     */
     public static void prepareReadCollection(Collection<? extends SynchronizedObject> col) {
         for (SynchronizedObject x : col) {
             x.prepareRead();
         }
     }
 
+    /**
+     * Release the read lock for all synchronized objects
+     * @param col collection of synchronized objects
+     */
     public static void releaseReadCollection(Collection<? extends SynchronizedObject> col) {
         for (SynchronizedObject x : col) {
             x.releaseRead();
         }
     }
 
+    /**
+     * Deep copy each element inside a Stream into a new List
+     * @param stream stream of objects
+     * @param <T> type
+     * @return new list
+     */
     public static <T extends BaseSocialEntity> List<T> deepCopySynchronizedList(Stream<T> stream) {
         return stream.map(x -> {
             x.prepareRead();
@@ -88,15 +138,12 @@ public class WinsomeHelper {
         }).collect(Collectors.toList());
     }
 
-    public static <T extends BaseSocialEntity> Set<T> deepCopySynchronizedSet(Stream<T> stream) {
-        return stream.map(x -> {
-            x.prepareRead();
-            T copied = x.deepCopyAs();
-            x.releaseRead();
-            return copied;
-        }).collect(Collectors.toSet());
-    }
-
+    /**
+     * Deep copy each element inside a Stream into a new Map
+     * @param stream stream of objects
+     * @param <T> type
+     * @return new map
+     */
     public static <T extends BaseSocialEntity, K, V> Map<K, V> deepCopySynchronizedMap(Stream<T> stream, Function<T, K> keyMap, Function<T, V> keyValue) {
         return stream.map(x -> {
             x.prepareRead();
@@ -106,14 +153,24 @@ public class WinsomeHelper {
         }).collect(Collectors.toMap(keyMap, keyValue));
     }
 
+    /**
+     * Trim the string and lower case
+     * @param username input username
+     * @return output username
+     */
     public static String normalizeUsername(String username) {
         if(username.startsWith(" ") || username.endsWith(" ")) {
             return username.trim().toLowerCase();
         }
 
-        return username.toLowerCase();
+        return username.trim().toLowerCase();
     }
 
+    /**
+     * Trim the string and lower case
+     * @param tag input tag
+     * @return output tag
+     */
     public static String normalizeTag(String tag) {
         if(tag.startsWith(" ") || tag.endsWith(" ")) {
             return tag.trim().toLowerCase();

@@ -28,6 +28,11 @@ import java.util.function.Function;
 
 import static it.winsome.common.network.enums.NetMessageType.*;
 
+/**
+ * Its task is to read messages from clients and to elaborate their request once the full message is received
+ * It tries to write the result message to the sender, if the message is not written fully the selection key
+ * is added with OP_WRITE and taken care of by another thread later one
+ */
 public class ReaderRequestHandler implements Runnable {
     private final static Map<NetMessageType, Function<ReaderRequestHandler, Boolean>> mapDispatcher;
     private static ServerLogic userService;
@@ -58,6 +63,8 @@ public class ReaderRequestHandler implements Runnable {
             return;
         }
 
+        // Keep reading from the channel
+        // If the message is not fully read, we return, otherwise we continue to process the request
         NetMessage incomingMessage;
         try {
             incomingMessage = session.getReadableMessage();
@@ -85,17 +92,22 @@ public class ReaderRequestHandler implements Runnable {
         incomingMessage.prepareRead();
         Function<ReaderRequestHandler, Boolean> fn = mapDispatcher.getOrDefault(incomingMessage.getType(),
                                                                         ReaderRequestHandler::handleUnknown);
+
+        // process the request
         if(!fn.apply(this)) {
             System.out.println("Connection closed!");
             onClientDisconnected();
             return;
         }
 
+        // we subscribe this key to OP_READ if the message was fully written o/w OP_WRITE
+        // we also set this incomingMessage to unused so we can reuse it later
         incomingMessage.setUnused(true);
         if(didFinishWrite)
             this.key.interestOps(SelectionKey.OP_READ);
         else
             this.key.interestOps(SelectionKey.OP_WRITE);
+        // notify the connection handler that this thread finished
         this.server.onHandlerFinish();
     }
 
@@ -119,6 +131,11 @@ public class ReaderRequestHandler implements Runnable {
         }});
     }
 
+    /**
+     * Login request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleLogin(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         String username = WinsomeHelper.normalizeUsername(incomingRequest.readString());
@@ -160,6 +177,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Follow request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleFollow(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         String toFollow = WinsomeHelper.normalizeUsername(incomingRequest.readString());
@@ -186,6 +208,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Unfollow request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleUnfollow(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         String toFollow = WinsomeHelper.normalizeUsername(incomingRequest.readString());
@@ -214,6 +241,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * List User request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleListUser(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         NetMessage response = readerRequestHandler.session.getWritableMessage();
@@ -235,6 +267,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Show Post request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleShowPost(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
@@ -256,6 +293,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Show Feed request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleShowFeed(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int pageIndex = incomingRequest.readInt();
@@ -279,6 +321,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * View Blog request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleViewBlog(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int pageIndex = incomingRequest.readInt();
@@ -302,6 +349,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Create Post request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleCreatePost(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         NetMessage response = readerRequestHandler.session.getWritableMessage();
@@ -331,6 +383,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Delete Post request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleDeletePost(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
@@ -361,6 +418,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Rewin Post request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleRewinPost(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
@@ -394,6 +456,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Create Comment request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleCreateComment(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
@@ -433,6 +500,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Rate entity request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleRateEntity(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         int postId = incomingRequest.readInt();
@@ -479,6 +551,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Get Wallet request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleGetWallet(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         NetMessage response = readerRequestHandler.session.getWritableMessage();
@@ -515,6 +592,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Logout request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleLogout(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
         NetMessage response = readerRequestHandler.session.getWritableMessage();
@@ -536,6 +618,11 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Unknown request handler
+     * @param readerRequestHandler caller
+     * @return true if the message was sent, false if the client disconnected
+     */
     public static boolean handleUnknown(ReaderRequestHandler readerRequestHandler) {
         NetMessage response = readerRequestHandler.session.getWritableMessage();
         response = NetMessage.reuseWritableNetMessageOrCreate(response, None, 4);
@@ -545,6 +632,10 @@ public class ReaderRequestHandler implements Runnable {
         return sendMessage(readerRequestHandler, response);
     }
 
+    /**
+     * Check if the current client is logged in with a valid user
+     * @return the user the client is connected with
+     */
     private User hasAuthorizedUser() {
         User loggedUser = ((ConnectionSession) key.attachment()).getUserLogged();
         if(loggedUser == null) {
@@ -559,6 +650,9 @@ public class ReaderRequestHandler implements Runnable {
         return loggedUser;
     }
 
+    /**
+     * Remove the client socket from the session and close the channel
+     */
     private void onClientDisconnected() {
         userService.removeSession(key);
         key.cancel();
@@ -569,6 +663,12 @@ public class ReaderRequestHandler implements Runnable {
         }
     }
 
+    /**
+     * Send the message to the client and update the didFinishWrite variable
+     * @param readerRequestHandler caller
+     * @param response response
+     * @return true if the message was sent, false if the client disconnected
+     */
     private static boolean sendMessage(ReaderRequestHandler readerRequestHandler, NetMessage response) {
         try {
             readerRequestHandler.didFinishWrite = response.sendMessage(readerRequestHandler.writableByteChannel);

@@ -10,6 +10,10 @@ import java.nio.channels.*;
 import java.util.Iterator;
 import java.util.concurrent.*;
 
+/**
+ * Server TCP class which uses NIO in the background to multiplex the various clients and send them to the right
+ * thread worker
+ */
 public class ServerConnector {
     private InetSocketAddress address;
     private Selector selector;
@@ -25,6 +29,12 @@ public class ServerConnector {
         this.timeoutTerminationThreadPoolMs = timeoutTerminationThreadPoolMs;
     }
 
+    /**
+     * Initialize the server by opening a Selector, a ServerSocket channel and Initializing the ThreadPool
+     * @param ip this server ip
+     * @param port this server port
+     * @throws IOException
+     */
     public void initServer(String ip, int port) throws IOException {
         address = new InetSocketAddress(ip, port);
         selector = Selector.open();
@@ -37,6 +47,10 @@ public class ServerConnector {
                 keepAliveThreadPoolTimerMinutes, TimeUnit.MINUTES, new ArrayBlockingQueue<>(10));
     }
 
+    /**
+     * Stops the server and wait a certain time for the ThreadPool to finish the requests
+     * @throws IOException
+     */
     public void stopServer() throws IOException {
         requestHandler.shutdown();
         try {
@@ -54,6 +68,10 @@ public class ServerConnector {
         System.out.println("Server TCP closed!");
     }
 
+    /**
+     * Main Loop of the server
+     * @throws IOException
+     */
     public void startServer() throws IOException {
         System.out.println("Server TCP started with port " + address.getPort() + "!");
         while(true) {
@@ -83,6 +101,11 @@ public class ServerConnector {
         }
     }
 
+    /**
+     * Accept the client socket, configure it as non blocking and attach a ConnectionSession
+     * @param key input key
+     * @throws IOException
+     */
     private void handleAccept(SelectionKey key) throws IOException {
         ServerSocketChannel server = (ServerSocketChannel) key.channel();
         SocketChannel client = server.accept();
@@ -92,6 +115,9 @@ public class ServerConnector {
         clientKey.attach(new ConnectionSession());
     }
 
+    /**
+     * Wakeup the selector stuck in select() if a Worker finishes his task
+     */
     public void onHandlerFinish() {
         selector.wakeup();
     }

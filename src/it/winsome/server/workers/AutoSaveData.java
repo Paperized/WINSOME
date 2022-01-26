@@ -3,6 +3,9 @@ package it.winsome.server.workers;
 import it.winsome.common.WinsomeHelper;
 import it.winsome.server.ServerLogic;
 
+/**
+ * Automatically save all entities of the social network
+ */
 public class AutoSaveData implements Runnable {
     ServerLogic serverLogic;
 

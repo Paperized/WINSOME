@@ -11,6 +11,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
+/**
+ * Contains all server configuration fields, can read from files and generate a default template
+ */
 public class ServerConfiguration {
     public String rmiServiceName = "serviceName";
     public int rmiServicePort = 6000;
@@ -25,7 +28,10 @@ public class ServerConfiguration {
     public long keepAliveThreadPoolMinutes = 5L;
     public long timeoutTerminationThreadPoolMs = 2000L;
 
-
+    /**Load a configuration from a path
+     * @param path path of the json file
+     * @throws IOException if the file does not exist
+     */
     public void loadFromJson(String path) throws IOException {
         Gson gson = new GsonBuilder().create();
         String jsonPost = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
@@ -44,6 +50,10 @@ public class ServerConfiguration {
         authorPercentage = config.authorPercentage;
     }
 
+    /**Generated a template configuration located at path
+     * @param path path of a file
+     * @return true if the default configuration was generated
+     */
     public static boolean generateDefaultFile(String path) {
         Gson gsonPost = new GsonBuilder()
                 .setPrettyPrinting()

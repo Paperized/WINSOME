@@ -8,6 +8,9 @@ import it.winsome.common.service.interfaces.UserCallbackClient;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 
+/**
+ * Implementation of the RMI Server Interface
+ */
 public class UserCallbackServerImpl extends UnicastRemoteObject implements UserCallbackServer {
     private ServerLogic logic;
 

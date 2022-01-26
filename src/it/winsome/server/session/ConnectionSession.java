@@ -3,6 +3,9 @@ package it.winsome.server.session;
 import it.winsome.common.entity.User;
 import it.winsome.common.network.NetMessage;
 
+/**
+ * It represents a session of a generic SelectionKey (NIO) or more practically, a client socket connection
+ */
 public class ConnectionSession {
     private NetMessage writableMessage;
     private NetMessage readableMessage;
