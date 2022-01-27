@@ -385,8 +385,7 @@ public class ServerLogic {
         }
 
         currentSessions.put(username, caller);
-        userLock.unlock();
-        sessionLock.unlock();
+        WinsomeHelper.releaseAllLocks(sessionLock, userLock);
         ((ConnectionSession)caller.attachment()).setUserLogged(userCopy);
 
         Lock blogLock = WinsomeHelper.acquireWriteLock(cachedBlogsRW);
@@ -566,8 +565,10 @@ public class ServerLogic {
         List<Post> result;
         Lock blogLock = WinsomeHelper.acquireReadLock(cachedBlogsRW);
         List<Post> curr = cachedBlogs.get(username);
-        if(curr.size() < pageStart)
+        if(curr.size() < pageStart) {
+            blogLock.unlock();
             return new ArrayList<>();
+        }
 
         int toIndex = Math.min(curr.size(), endPage);
         result = WinsomeHelper.deepCopySynchronizedList(curr.subList(pageStart, toIndex).stream());
@@ -630,6 +631,16 @@ public class ServerLogic {
                 return UserSelfRewin;
             }
 
+            User user = getRealUserByUsername(post.getUsername());
+            user.prepareRead();
+            if(!user.hasUserFollowed(realOriginalPost.getUsername())) {
+                realOriginalPost.releaseRead();
+                user.releaseRead();
+                postLock.unlock();
+                return PostNotInFeed;
+            }
+
+            user.releaseRead();
             realOriginalPost.releaseRead();
         }
 
@@ -705,6 +716,8 @@ public class ServerLogic {
         post.prepareRead();
         if(!post.isRewin()) {
             postMap.values().removeIf(p -> {
+                if(p == post) return false;
+
                 p.prepareRead();
                 if(p.isRewin()) {
                     Post originalP = p.getOriginalPost();
@@ -874,13 +887,17 @@ public class ServerLogic {
     /**
      * Add a comment to a post
      * @param comment comment to be added
-     * @param user caller
      * @return result response
      */
-    public NetResponseType addComment(Comment comment, User user) {
+    public NetResponseType addComment(Comment comment) {
         Post targetPost = getRealPost(comment.getPostId());
         if(targetPost == null) {
             return EntityNotExists;
+        }
+
+        User user = getRealUserByUsername(comment.getOwner());
+        if(user == null) {
+            return UsernameNotExists;
         }
 
         SynchronizedObject.prepareInWriteMode(targetPost);
@@ -954,17 +971,14 @@ public class ServerLogic {
      * @throws IOException if the btc URL call was unsuccessful
      */
     public Wallet getWallet(String username, CurrencyType currency) throws IOException {
-        Lock userLock = WinsomeHelper.acquireReadLock(registeredUsersRW);
-        if(!registeredUsers.containsKey(username)) {
-            userLock.unlock();
+        User user = getRealUserByUsername(username);
+        if(user == null) {
             return null;
         }
 
-        User user = registeredUsers.get(username);
         user.prepareRead();
         Wallet wallet = user.getWallet();
         user.releaseRead();
-        userLock.unlock();
 
         if(currency == CurrencyType.Bitcoin) {
             URLConnection urlConnection = btcConverterURL.openConnection();
@@ -1041,5 +1055,9 @@ public class ServerLogic {
      */
     public void unlockPosts() {
         postMapRW.readLock().unlock();
+    }
+
+    public int getLatestPostId() {
+        return maxPostId.get() - 1;
     }
 }

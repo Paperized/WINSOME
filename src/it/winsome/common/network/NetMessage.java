@@ -52,7 +52,7 @@ public class NetMessage {
      */
     public static NetMessage reuseWritableNetMessageOrCreate(NetMessage message, NetMessageType type, int capacityNeeded) {
         if(message == null) return writableNetMessage(type, capacityNeeded);
-        if(message.getMaxCapacity() < capacityNeeded) {
+        if(message.getMaxCapacity() < capacityNeeded + 8) {
             return writableNetMessage(type, capacityNeeded);
         }
 

@@ -18,7 +18,6 @@ import it.winsome.common.WinsomeHelper;
 import it.winsome.common.validation.Validator;
 
 import java.io.IOException;
-import java.net.UnknownHostException;
 import java.nio.file.NoSuchFileException;
 import java.rmi.NoSuchObjectException;
 import java.rmi.NotBoundException;
@@ -28,14 +27,14 @@ import java.rmi.registry.Registry;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 
 /**
  * Core of a client, this manages connections, and every interaction the client has with the server.
  * Input management is not handled by this class
  */
 public class ClientApplication implements AutoCloseable {
-    private final static Map<String, BiConsumer<ClientApplication, String[]>> mapDispatcher;
+    private final static Map<String, BiFunction<ClientApplication, String[], NetResponseType>> mapDispatcher;
     private ClientConnector clientConnector;
     private NetMessage cachedMessage;
     private NetMessage cachedMessageReceive;
@@ -106,19 +105,20 @@ public class ClientApplication implements AutoCloseable {
      * @param command command name
      * @param args arguments used by the command
      */
-    public void sendCommand(String command, String[] args) {
-        BiConsumer<ClientApplication, String[]> consumer =
+    public NetResponseType sendCommand(String command, String[] args) {
+        BiFunction<ClientApplication, String[], NetResponseType> consumer =
                 mapDispatcher.getOrDefault(command, ClientApplication::handleUnknown);
 
         try {
-            consumer.accept(this, args);
+            return consumer.apply(this, args);
         } catch(InvalidParameterException e) {
             printError("Parameter invalid: " + e.getMessage());
+            return NetResponseType.InvalidParameters;
         }
     }
 
     static {
-        mapDispatcher = Collections.unmodifiableMap(new HashMap<String, BiConsumer<ClientApplication, String[]>>() {{
+        mapDispatcher = Collections.unmodifiableMap(new HashMap<String, BiFunction<ClientApplication, String[], NetResponseType>>() {{
             put("register", ClientApplication::handleRegister);
             put("login", ClientApplication::handleLogin);
             put("logout", ClientApplication::handleLogout);
@@ -153,7 +153,7 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleHelp(ClientApplication sender, String[] args) {
+    private static NetResponseType handleHelp(ClientApplication sender, String[] args) {
         printResponse("register username password [tags]\n" +
                 "login username password\n" +
                 "logout\n" +
@@ -171,6 +171,7 @@ public class ClientApplication implements AutoCloseable {
                 "rate postId [+1 or -1]\n" +
                 "comment postId \"content\"\n" +
                 "wallet currencyName\n");
+        return NetResponseType.Success;
     }
 
     /**
@@ -178,7 +179,7 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleRegister(ClientApplication sender, String[] args) {
+    private static NetResponseType handleRegister(ClientApplication sender, String[] args) {
         String username = args[0];
         String password = WinsomeHelper.generateFromSHA256(args[1]);
         String[] tags = Arrays.copyOfRange(args, 2, args.length);
@@ -190,10 +191,13 @@ public class ClientApplication implements AutoCloseable {
         try {
             User createdUser = sender.regUserSrv.registerUser(username, password, tags);
             printResponse("User created with username %s", createdUser.getUsername());
+            return NetResponseType.Success;
         } catch (InvalidParameterException ex) {
             printError(ex.toString());
+            return NetResponseType.InvalidParameters;
         } catch (RemoteException e) {
             printError("RMI not working properly, did you call init? More: " + e.getMessage());
+            return NetResponseType.InternalError;
         }
     }
 
@@ -202,7 +206,7 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleLogin(ClientApplication sender, String[] args) {
+    private static NetResponseType handleLogin(ClientApplication sender, String[] args) {
         String username = args[0];
         String password = WinsomeHelper.generateFromSHA256(args[1]);
 
@@ -211,20 +215,25 @@ public class ClientApplication implements AutoCloseable {
 
         if(sender.clientState.isLoggedIn()) {
             printError("You are already logged in, logout from your current session!");
-            return;
+            return NetResponseType.ClientAlreadyLoggedIn;
         }
 
         if(!sender.clientConnector.isConnected()) {
             if(!sender.clientConnector.startTCP()) {
                 printError("Could not connect to server!");
-                return;
+                return NetResponseType.MissingConnection;
             }
         }
 
-        sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage, NetMessageType.Login,
-                        NetMessage.getStringSize(username, password))
-                .writeString(username)
-                .writeString(password);
+        try {
+            sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage, NetMessageType.Login,
+                            NetMessage.getStringSize(username, password))
+                    .writeString(username)
+                    .writeString(password);
+        } catch(Exception e) {
+            int a = 2;
+        }
+
 
         try {
             NetMessage responseMessage = sender.sendAndAwaitResponse();
@@ -256,13 +265,19 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+
+                return result;
             }
+            return NetResponseType.InternalError;
         } catch (SocketDisconnectedException e) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         } catch (UserNotExistsException e) {
             printError("Unexpected response from server!");
+            return NetResponseType.UsernameNotExists;
         } catch (RemoteException e) {
             printError("RMI not working properly, did you call init? More: " + e.getMessage());
+            return NetResponseType.InternalError;
         }
     }
 
@@ -271,8 +286,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleLogout(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleLogout(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
 
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                 NetMessageType.Logout, 0);
@@ -295,15 +310,21 @@ public class ClientApplication implements AutoCloseable {
                 sender.regUserSrv.unregisterUserCallback(sender.currentUser.getUsername(), sender.clientState);
                 UnicastRemoteObject.unexportObject(sender.clientState, true);
                 sender.clientConnector.disconnect();
+                return result;
             }
+            return NetResponseType.InternalError;
         } catch (UserNotExistsException e) {
             printError("Unexpected response from server!");
+            return NetResponseType.UsernameNotExists;
         } catch (NoSuchObjectException e) {
             printError("RMI Object error. More: " + e.getMessage());
+            return NetResponseType.InternalError;
         } catch (RemoteException e) {
             printError("RMI not working properly, did you call init? More: " + e.getMessage());
+            return NetResponseType.InternalError;
         } catch (SocketDisconnectedException | IOException e) {
             e.printStackTrace();
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -312,8 +333,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleListUsers(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleListUsers(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
 
         sender.cachedMessage = NetMessage.reuseWritableNetMessageOrCreate(sender.cachedMessage,
                 NetMessageType.ListUser, 0);
@@ -350,9 +371,13 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+
+                return result;
             }
+            return NetResponseType.InternalError;
         } catch (SocketDisconnectedException e) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -361,8 +386,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleListFollowers(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleListFollowers(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
 
         Iterator<String> followingIterator = sender.currentUser.getFollowingIterator();
         StringBuilder outputString = new StringBuilder(100);
@@ -383,6 +408,7 @@ public class ClientApplication implements AutoCloseable {
         }
 
         printResponse(outputString.toString());
+        return NetResponseType.Success;
     }
 
     /**
@@ -390,8 +416,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleListFollowing(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleListFollowing(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
 
         Iterator<String> followingIterator = sender.currentUser.getFollowedIterator();
         StringBuilder outputString = new StringBuilder(100);
@@ -412,6 +438,7 @@ public class ClientApplication implements AutoCloseable {
         }
 
         printResponse(outputString.toString());
+        return NetResponseType.Success;
     }
 
     /**
@@ -419,8 +446,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleFollow(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleFollow(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         String user = args[0];
 
         Validator.validateUsername(user);
@@ -448,9 +475,13 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+
+                return result;
             }
+            return NetResponseType.InternalError;
         } catch (SocketDisconnectedException e) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -459,8 +490,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleUnfollowUser(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleUnfollowUser(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         String user = args[0];
 
         Validator.validateUsername(user);
@@ -490,9 +521,12 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
+            return NetResponseType.InternalError;
         } catch (SocketDisconnectedException e) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -501,8 +535,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleViewBlog(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleViewBlog(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         int page = 0;
         if(args.length == 1) {
             page = Integer.parseInt(args[0]);
@@ -557,10 +591,12 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
-
+            return NetResponseType.InternalError;
         } catch(SocketDisconnectedException ex) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -569,8 +605,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleCreatePost(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleCreatePost(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         String title = args[0];
         String content = args[1];
 
@@ -597,10 +633,12 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
-
+            return NetResponseType.InternalError;
         } catch(SocketDisconnectedException ex) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -609,8 +647,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleShowFeed(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleShowFeed(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         int page = 0;
         if(args.length == 1) {
             page = Integer.parseInt(args[0]);
@@ -664,10 +702,12 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
-
+            return NetResponseType.InternalError;
         } catch(SocketDisconnectedException ex) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -676,8 +716,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleShowPost(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleShowPost(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         int postId = Integer.parseInt(args[0]);
 
         Validator.validatePostId(postId);
@@ -697,7 +737,7 @@ public class ClientApplication implements AutoCloseable {
                     Post currentPost = data.post;
                     if(currentPost == null) {
                         printError("Post with id %d does not exist!", postId);
-                        return;
+                        return NetResponseType.EntityNotExists;
                     }
 
                     StringBuilder outputString = new StringBuilder(500);
@@ -740,10 +780,12 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
-
+            return NetResponseType.InternalError;
         } catch(SocketDisconnectedException ex) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -752,8 +794,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleDeletePost(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleDeletePost(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         int postId = Integer.parseInt(args[0]);
 
         Validator.validatePostId(postId);
@@ -779,10 +821,12 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
-
+            return NetResponseType.InternalError;
         } catch(SocketDisconnectedException ex) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -791,8 +835,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleRewinPost(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleRewinPost(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         int postId = Integer.parseInt(args[0]);
 
         Validator.validatePostId(postId);
@@ -810,21 +854,23 @@ public class ClientApplication implements AutoCloseable {
                 } else if(result == NetResponseType.Success) {
                     int rewinId = responseMessage.readInt();
                     printResponse("Post rewinned with id %d!", rewinId);
-                } else if(result == NetResponseType.NotAuthorized) {
-                    printError("You are not authorized to delete this post!");
-                } else if(result == NetResponseType.EntityNotExists) {
-                    printError("This post does not exists!");
+                } else if(result == NetResponseType.OriginalPostNotExists) {
+                    printError("This rewin post does not exists!");
                 } else if(result == NetResponseType.UserSelfRewin) {
                     printError("You cannot rewin your own post!");
+                } else if(result == NetResponseType.PostNotInFeed) {
+                    printError("You cannot rewin a post not in your feed!");
                 } else if(result == NetResponseType.ClientNotLoggedIn) {
                     printError("You are not logged in yet!");
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
-
+            return NetResponseType.InternalError;
         } catch(SocketDisconnectedException ex) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -833,8 +879,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleRatePost(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleRatePost(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         int postId = Integer.parseInt(args[0]);
         VoteType vote = VoteType.fromString(args[1]);
 
@@ -868,10 +914,12 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
-
+            return NetResponseType.InternalError;
         } catch(SocketDisconnectedException ex) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -880,8 +928,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleAddComment(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleAddComment(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         int postId = Integer.parseInt(args[0]);
         String comment = args[1];
 
@@ -913,9 +961,12 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
+            return NetResponseType.InternalError;
         } catch(SocketDisconnectedException ex) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -924,8 +975,8 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleWallet(ClientApplication sender, String[] args) {
-        if(sender.checkServerConnection() || sender.checkLogin()) return;
+    private static NetResponseType handleWallet(ClientApplication sender, String[] args) {
+        if(sender.checkServerConnection() || sender.checkLogin()) return NetResponseType.ClientNotLoggedIn;
         CurrencyType currencyType = CurrencyType.Winsome;
         if(args.length > 0) {
             Validator.validateCurrencyType(args[0]);
@@ -962,10 +1013,12 @@ public class ClientApplication implements AutoCloseable {
                 } else {
                     printError("Unexpected response from server!");
                 }
+                return result;
             }
-
+            return NetResponseType.InternalError;
         } catch(SocketDisconnectedException ex) {
             printError("Server probably unreachable!");
+            return NetResponseType.BrokenConnection;
         }
     }
 
@@ -974,8 +1027,9 @@ public class ClientApplication implements AutoCloseable {
      * @param sender client application
      * @param args arguments
      */
-    private static void handleUnknown(ClientApplication sender, String[] args) {
+    private static NetResponseType handleUnknown(ClientApplication sender, String[] args) {
         printError("Unknown command!");
+        return NetResponseType.Unknown;
     }
 
     /**
@@ -1052,5 +1106,9 @@ public class ClientApplication implements AutoCloseable {
     @Override
     public void close() {
         clearResources();
+    }
+
+    public boolean isLoggedIn() {
+        return clientState.isLoggedIn();
     }
 }

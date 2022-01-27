@@ -42,8 +42,11 @@ public abstract class SynchronizedObject implements Cloneable {
      */
     protected void checkReadSynchronization() throws SynchronizationException {
         if(synchronizationEnabled) {
-            if(!isThreadReading() && !isThreadWriting())
-                throw new SynchronizationException();
+            if(isThreadWriting() || isThreadReading()) {
+                return;
+            }
+
+            throw new SynchronizationException();
         }
     }
 

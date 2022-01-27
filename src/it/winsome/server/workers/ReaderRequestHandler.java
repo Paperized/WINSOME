@@ -148,7 +148,7 @@ public class ReaderRequestHandler implements Runnable {
      */
     public static boolean handleLogin(ReaderRequestHandler readerRequestHandler) {
         NetMessage incomingRequest = readerRequestHandler.session.getReadableMessage();
-        String username = incomingRequest.readString(Validator::validateUsername);
+        String username = WinsomeHelper.normalizeUsername(incomingRequest.readString(Validator::validateUsername));
         String password = incomingRequest.readString(Validator::validatePassword);
 
         NetMessage response = readerRequestHandler.session.getWritableMessage();
@@ -449,14 +449,18 @@ public class ReaderRequestHandler implements Runnable {
             Post rewin = new Post(-1, loggedUser.getUsername(), null, null);
             rewin.setOriginalPost(new Post(postId));
             NetResponseType result = userService.addPost(rewin);
-            if(result == NetResponseType.EntityNotExists) {
+            if(result == NetResponseType.OriginalPostNotExists) {
                 response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
-                response.writeInt(NetResponseType.EntityNotExists.getId());
+                response.writeInt(NetResponseType.OriginalPostNotExists.getId());
                 WinsomeHelper.printfDebug("Incoming rewin post from %s with id %d but post does not exist!", loggedUser.getUsername(), postId);
             } else if(result == NetResponseType.UserSelfRewin) {
                 response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
                 response.writeInt(NetResponseType.UserSelfRewin.getId());
                 WinsomeHelper.printfDebug("Incoming rewin post from %s with id %d but post does not exist!", loggedUser.getUsername(), postId);
+            } else if(result == NetResponseType.PostNotInFeed) {
+                response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 4);
+                response.writeInt(NetResponseType.PostNotInFeed.getId());
+                WinsomeHelper.printfDebug("Incoming rewin post from %s with id %d but post is not in feed!", loggedUser.getUsername(), postId);
             } else {
                 response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 8);
                 response.writeInt(NetResponseType.Success.getId());
@@ -488,7 +492,7 @@ public class ReaderRequestHandler implements Runnable {
             Comment comment = new Comment(-1, loggedUser.getUsername(), content);
             comment.setPostId(postId);
 
-            NetResponseType result = userService.addComment(comment, loggedUser);
+            NetResponseType result = userService.addComment(comment);
             if(result == NetResponseType.Success) {
                 response = NetMessage.reuseWritableNetMessageOrCreate(response, incomingRequest.getType(), 8);
                 response.writeInt(result.getId());

@@ -24,6 +24,7 @@ public class ServerConfiguration {
     public double authorPercentage = 80D;
     public String dataFolder = "data/";
     public long autoSavePeriodSeconds = 20L;
+    public long walletCalculatorPeriodSeconds = 20L;
     public long timeoutOnStopAutoSaveSeconds = 3L;
     public long keepAliveThreadPoolMinutes = 5L;
     public long timeoutTerminationThreadPoolMs = 2000L;
@@ -42,6 +43,7 @@ public class ServerConfiguration {
         tcpPort = config.tcpPort;
         dataFolder = config.dataFolder;
         autoSavePeriodSeconds = config.autoSavePeriodSeconds;
+        walletCalculatorPeriodSeconds = config.walletCalculatorPeriodSeconds;
         timeoutOnStopAutoSaveSeconds = config.timeoutOnStopAutoSaveSeconds;
         keepAliveThreadPoolMinutes = config.keepAliveThreadPoolMinutes;
         timeoutTerminationThreadPoolMs = config.timeoutTerminationThreadPoolMs;

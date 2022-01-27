@@ -11,11 +11,15 @@ import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.time.Instant;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class ServerMain {
+    public static boolean isTest = false;
     private static Registry reg;
     private static ServerConnector tcpServer;
     private static ScheduledExecutorService walletUpdater, autoSaveUpdater;
@@ -27,7 +31,8 @@ public class ServerMain {
 
     public static void main(String[] args) throws IOException {
         WinsomeHelper.setDebugMode(true);
-        Runtime.getRuntime().addShutdownHook(new Thread(ServerMain::onQuit));
+        if(!isTest)
+            Runtime.getRuntime().addShutdownHook(new Thread(ServerMain::onQuit));
 
         try {
             serverConfiguration.loadFromJson("./server_config.json");
@@ -44,6 +49,12 @@ public class ServerMain {
                 e.printStackTrace();
             }
             return;
+        }
+
+        if(isTest) {
+            serverConfiguration.dataFolder = "tests." +
+                    new SimpleDateFormat("MM-dd-yyyy HH-mm-ss").format(Timestamp.from(Instant.now())) +
+                    "/";
         }
 
         serverLogic = new ServerLogic(serverConfiguration.dataFolder);
@@ -67,7 +78,8 @@ public class ServerMain {
 
         autoSaveUpdater = Executors.newScheduledThreadPool(1);
         walletUpdater = Executors.newScheduledThreadPool(1);
-        walletUpdater.scheduleWithFixedDelay(walletCalculator, 0L,20L, TimeUnit.SECONDS);
+        walletUpdater.scheduleWithFixedDelay(walletCalculator, serverConfiguration.walletCalculatorPeriodSeconds,
+                serverConfiguration.walletCalculatorPeriodSeconds, TimeUnit.SECONDS);
         autoSaveUpdater.scheduleWithFixedDelay(dataSaver, serverConfiguration.autoSavePeriodSeconds,
                 serverConfiguration.autoSavePeriodSeconds, TimeUnit.SECONDS);
         tcpServer.startServer();
@@ -85,7 +97,7 @@ public class ServerMain {
     /**
      * Clean the connections and additional thread working
      */
-    private static void onQuit() {
+    public static void onQuit() {
         try {
             WinsomeHelper.printlnDebug("Closing...!");
             if(configLoadingFailed)

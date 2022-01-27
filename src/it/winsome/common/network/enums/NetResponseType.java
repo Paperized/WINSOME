@@ -22,7 +22,9 @@ public enum NetResponseType {
     UserSelfRewin(15),
     EntityNotExists(16),
     UserAlreadyLoggedIn(17),
-    InternalError(18);
+    InternalError(18),
+    MissingConnection(19),
+    BrokenConnection(20);
 
     private final int id;
     NetResponseType(int id) {

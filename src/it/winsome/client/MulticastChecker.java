@@ -60,6 +60,6 @@ public class MulticastChecker extends Thread {
     @Override
     public void interrupt() {
         super.interrupt();
-        multicastSocket.disconnect();
+        multicastSocket.close();
     }
 }
